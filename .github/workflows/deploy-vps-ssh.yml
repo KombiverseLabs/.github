@@ -157,7 +157,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Health check
+      - name: Verify VPS deployment
+        id: health
         if: inputs.health-check-url != ''
         run: |
           echo "Checking health at ${{ inputs.health-check-url }}${{ inputs.health-check-path }}"

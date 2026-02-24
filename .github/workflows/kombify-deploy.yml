@@ -176,7 +176,7 @@ jobs:
   # ── Step 2: Build (Dual: GHCR + ACR) ────────────────────────
   build:
     needs: ci-gate
-    uses: ./.github/workflows/build-and-push.yml
+    uses: KombiverseLabs/.github/.github/workflows/build-and-push.yml@main
     with:
       image-name: ${{ inputs.image-name }}
       dockerfile: ${{ inputs.dockerfile }}
@@ -193,7 +193,7 @@ jobs:
   deploy-aca:
     name: Deploy ${{ inputs.service-name }} -> Azure Container Apps
     needs: build
-    uses: ./.github/workflows/deploy-azure.yml
+    uses: KombiverseLabs/.github/.github/workflows/deploy-azure.yml@main
     with:
       container-app-name: ${{ inputs.container-app-name }}
       resource-group: ${{ inputs.resource-group }}
@@ -214,7 +214,7 @@ jobs:
     name: Mirror ${{ inputs.service-name }} -> VPS & Verify
     needs: [build, deploy-aca]
     if: inputs.vps-compose-file != ''
-    uses: ./.github/workflows/deploy-vps-ssh.yml
+    uses: KombiverseLabs/.github/.github/workflows/deploy-vps-ssh.yml@main
     with:
       compose-file: ${{ inputs.vps-compose-file }}
       service-name: ${{ inputs.service-name }}
