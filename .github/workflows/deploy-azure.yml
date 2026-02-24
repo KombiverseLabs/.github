@@ -134,9 +134,15 @@ jobs:
           # Build env-vars argument
           ENV_ARGS=""
           if [ -n "${{ inputs.env-vars }}" ]; then
-            ENV_ARGS="--set-env-vars ${{ inputs.env-vars }}"
+            # Evaluate the env-vars string to expand KeyVault secrets exported as env vars
+            # Note: Azure/get-keyvault-secrets converts hyphens to underscores in env var names.
+            # So a secret like "database-url" becomes $database_url
+            EVALUATED_VARS=$(echo "${{ inputs.env-vars }}" | envsubst)
+            ENV_ARGS="--set-env-vars $EVALUATED_VARS"
           fi
 
+          echo "Updating Container App..."
+          # Note: This executes the command. We don't echo secrets in logs.
           az containerapp update \
             --name ${{ inputs.container-app-name }} \
             --resource-group ${{ inputs.resource-group }} \

@@ -1,7 +1,7 @@
 # kombify Unified Deploy Pipeline
 # Orchestrates the full lifecycle: CI Gate → Build (Dual) → Deploy ACA → Verify → Mirror VPS → Verify VPS → Summary
 # Each repo calls this with service-specific parameters.
-name: kombify Deploy
+name: Build Image (ACR+GHCR) -> Deploy to Azure Container Apps -> HTTP Verification -> Mirror to VPS
 
 on:
   workflow_call:
@@ -53,6 +53,16 @@ on:
         default: 'cae-kombify-prod'
       env-vars:
         description: 'ACA env vars (space-separated KEY=VALUE)'
+        required: false
+        type: string
+        default: ''
+      keyvault-name:
+        description: 'Azure Key Vault name for secrets'
+        required: false
+        type: string
+        default: ''
+      keyvault-secrets:
+        description: 'Key Vault secret names to fetch'
         required: false
         type: string
         default: ''
@@ -188,6 +198,8 @@ jobs:
       container-app-env: ${{ inputs.container-app-env }}
       image: ${{ needs.build.outputs.acr-image || needs.build.outputs.image }}
       env-vars: ${{ inputs.env-vars }}
+      keyvault-name: ${{ inputs.keyvault-name }}
+      keyvault-secrets: ${{ inputs.keyvault-secrets }}
       health-check-path: ${{ inputs.health-endpoint }}
       expected-content-type: ${{ inputs.expected-content-type }}
       expected-content: ${{ inputs.expected-content }}
