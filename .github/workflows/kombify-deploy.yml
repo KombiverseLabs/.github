@@ -1,0 +1,263 @@
+# kombify Unified Deploy Pipeline
+# Orchestrates the full lifecycle: CI Gate → Build (Dual) → Deploy ACA → Verify → Mirror VPS → Verify VPS → Summary
+# Each repo calls this with service-specific parameters.
+name: kombify Deploy
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: 'Service identifier (used for VPS directory, logging)'
+        required: true
+        type: string
+      image-name:
+        description: 'Docker image name (defaults to repo name)'
+        required: false
+        type: string
+        default: ''
+      dockerfile:
+        description: 'Path to Dockerfile'
+        required: false
+        type: string
+        default: 'Dockerfile'
+      docker-context:
+        description: 'Docker build context'
+        required: false
+        type: string
+        default: '.'
+      build-args:
+        description: 'Docker build args (multiline KEY=VALUE)'
+        required: false
+        type: string
+        default: ''
+      platforms:
+        description: 'Target platforms for Docker build'
+        required: false
+        type: string
+        default: 'linux/amd64'
+
+      # Azure Container Apps
+      container-app-name:
+        description: 'Azure Container App name'
+        required: true
+        type: string
+      resource-group:
+        description: 'Azure resource group'
+        required: false
+        type: string
+        default: 'rg-kombify-prod'
+      container-app-env:
+        description: 'Azure Container App Environment'
+        required: false
+        type: string
+        default: 'cae-kombify-prod'
+      env-vars:
+        description: 'ACA env vars (space-separated KEY=VALUE)'
+        required: false
+        type: string
+        default: ''
+
+      # ACR dual-registry
+      acr-name:
+        description: 'Azure Container Registry name'
+        required: false
+        type: string
+        default: 'acrkombifyprod'
+      acr-image-name:
+        description: 'Image name in ACR'
+        required: false
+        type: string
+        default: ''
+
+      # Verification
+      health-endpoint:
+        description: 'Health check path (e.g., /api/health)'
+        required: false
+        type: string
+        default: '/health'
+      expected-content-type:
+        description: 'Expected Content-Type for verification'
+        required: false
+        type: string
+        default: 'text/html'
+      expected-content:
+        description: 'Expected body content (case-insensitive)'
+        required: false
+        type: string
+        default: 'kombify'
+      version-endpoint:
+        description: 'Path for L4 version check (e.g., /api/health)'
+        required: false
+        type: string
+        default: ''
+
+      # VPS mirroring
+      vps-compose-file:
+        description: 'Path to docker-compose file for VPS deploy (empty to skip VPS)'
+        required: false
+        type: string
+        default: ''
+      vps-health-url:
+        description: 'VPS health check URL (empty to skip)'
+        required: false
+        type: string
+        default: ''
+
+      # Secrets management
+      doppler-project:
+        description: 'Doppler project name (empty to skip)'
+        required: false
+        type: string
+        default: ''
+      doppler-config:
+        description: 'Doppler config (prd, stg)'
+        required: false
+        type: string
+        default: 'prd'
+
+    secrets:
+      AZURE_CREDENTIALS:
+        required: true
+      ACR_USERNAME:
+        required: false
+      ACR_PASSWORD:
+        required: false
+      VPS_HOST:
+        required: false
+      VPS_USER:
+        required: false
+      VPS_SSH_KEY:
+        required: false
+      VPS_SSH_PORT:
+        required: false
+      DOPPLER_TOKEN:
+        required: false
+
+jobs:
+  # ── Step 1: CI Gate ──────────────────────────────────────────
+  ci-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify CI status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = context.sha;
+            const { data: checkRuns } = await github.rest.checks.listForRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: sha,
+              filter: 'latest'
+            });
+
+            const failed = checkRuns.check_runs.filter(
+              cr => cr.conclusion === 'failure' && cr.name !== context.job
+            );
+
+            if (failed.length > 0) {
+              const names = failed.map(f => f.name).join(', ');
+              core.setFailed(`CI checks failed: ${names}. Aborting deploy.`);
+            } else {
+              core.info(`All CI checks passed for ${sha.substring(0, 7)}`);
+            }
+
+  # ── Step 2: Build (Dual: GHCR + ACR) ────────────────────────
+  build:
+    needs: ci-gate
+    uses: ./.github/workflows/build-and-push.yml
+    with:
+      image-name: ${{ inputs.image-name }}
+      dockerfile: ${{ inputs.dockerfile }}
+      context: ${{ inputs.docker-context }}
+      build-args: ${{ inputs.build-args }}
+      platforms: ${{ inputs.platforms }}
+      push: true
+      push-to-acr: true
+      acr-name: ${{ inputs.acr-name }}
+      acr-image-name: ${{ inputs.acr-image-name }}
+    secrets: inherit
+
+  # ── Step 3: Deploy to Azure Container Apps ───────────────────
+  deploy-aca:
+    needs: build
+    uses: ./.github/workflows/deploy-azure.yml
+    with:
+      container-app-name: ${{ inputs.container-app-name }}
+      resource-group: ${{ inputs.resource-group }}
+      container-app-env: ${{ inputs.container-app-env }}
+      image: ${{ needs.build.outputs.acr-image || needs.build.outputs.image }}
+      env-vars: ${{ inputs.env-vars }}
+      health-check-path: ${{ inputs.health-endpoint }}
+      expected-content-type: ${{ inputs.expected-content-type }}
+      expected-content: ${{ inputs.expected-content }}
+      version-endpoint: ${{ inputs.version-endpoint }}
+      rollback-on-failure: true
+    secrets: inherit
+
+  # ── Step 4: Mirror to VPS ────────────────────────────────────
+  mirror-vps:
+    needs: [build, deploy-aca]
+    if: inputs.vps-compose-file != ''
+    uses: ./.github/workflows/deploy-vps-ssh.yml
+    with:
+      compose-file: ${{ inputs.vps-compose-file }}
+      service-name: ${{ inputs.service-name }}
+      image-tag: sha-${{ github.sha }}
+      health-check-url: ${{ inputs.vps-health-url }}
+      health-check-path: ${{ inputs.health-endpoint }}
+      doppler-project: ${{ inputs.doppler-project }}
+      doppler-config: ${{ inputs.doppler-config }}
+    secrets: inherit
+
+  # ── Step 5: Summary ──────────────────────────────────────────
+  summary:
+    needs: [build, deploy-aca, mirror-vps]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Generate deployment summary
+        run: |
+          echo "### 🚀 kombify Deploy: ${{ inputs.service-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Build (GHCR+ACR)** | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Deploy ACA** | ${{ needs.deploy-aca.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Mirror VPS** | ${{ needs.mirror-vps.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create issue on failure
+        if: needs.deploy-aca.result == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = `[DEPLOY FAIL] ${{ inputs.service-name }} deployment failed`;
+            const body = [
+              `## Deployment Failure: ${{ inputs.service-name }}`,
+              '',
+              `| Detail | Value |`,
+              `|--------|-------|`,
+              `| **Commit** | \`${{ github.sha }}\` |`,
+              `| **Container App** | \`${{ inputs.container-app-name }}\` |`,
+              `| **Build** | ${{ needs.build.result }} |`,
+              `| **ACA Deploy** | ${{ needs.deploy-aca.result }} |`,
+              `| **VPS Mirror** | ${{ needs.mirror-vps.result || 'skipped' }} |`,
+              `| **Time** | ${new Date().toISOString()} |`,
+              '',
+              '### Recovery',
+              '1. Check the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})',
+              '2. ACA should have auto-rolled back to the previous revision',
+              '3. See `docs/RECOVERY_RUNBOOK.md` for escalation'
+            ].join('\n');
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['deploy-failure', 'priority-critical']
+            });

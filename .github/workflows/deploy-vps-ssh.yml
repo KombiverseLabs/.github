@@ -1,0 +1,194 @@
+# Reusable workflow: Deploy to VPS via SSH
+# Connects to target server, pulls GHCR images, runs docker-compose
+name: Deploy to VPS (SSH)
+
+on:
+  workflow_call:
+    inputs:
+      compose-file:
+        description: 'Path to docker-compose file in the repo (e.g., deploy/docker-compose.prod.yml)'
+        required: true
+        type: string
+      service-name:
+        description: 'Service identifier for deploy directory on VPS'
+        required: true
+        type: string
+      image-tag:
+        description: 'Image tag to deploy (e.g., sha-abc1234 or latest)'
+        required: false
+        type: string
+        default: 'latest'
+      health-check-url:
+        description: 'URL to check after deployment (empty to skip)'
+        required: false
+        type: string
+        default: ''
+      health-check-path:
+        description: 'Health check path appended to service URL'
+        required: false
+        type: string
+        default: '/health'
+      pre-deploy-command:
+        description: 'Command to run before docker-compose up (e.g., migrations)'
+        required: false
+        type: string
+        default: ''
+      doppler-project:
+        description: 'Doppler project name for secrets injection'
+        required: false
+        type: string
+        default: ''
+      doppler-config:
+        description: 'Doppler config (e.g., prd, stg)'
+        required: false
+        type: string
+        default: 'prd'
+    secrets:
+      VPS_HOST:
+        required: true
+      VPS_USER:
+        required: true
+      VPS_SSH_KEY:
+        required: true
+      VPS_SSH_PORT:
+        required: false
+      DOPPLER_TOKEN:
+        required: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set SSH port
+        id: ssh
+        run: |
+          PORT="${{ secrets.VPS_SSH_PORT }}"
+          echo "port=${PORT:-22}" >> $GITHUB_OUTPUT
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p ${{ steps.ssh.outputs.port }} ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Create deploy directory on VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p ${{ steps.ssh.outputs.port }} \
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
+            "mkdir -p ~/kombify/${{ inputs.service-name }}"
+
+      - name: Copy compose file to VPS
+        run: |
+          scp -i ~/.ssh/deploy_key -P ${{ steps.ssh.outputs.port }} \
+            ${{ inputs.compose-file }} \
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:~/kombify/${{ inputs.service-name }}/docker-compose.yml
+
+      - name: Copy health check script
+        run: |
+          if [ -f "deploy/health-check.sh" ]; then
+            scp -i ~/.ssh/deploy_key -P ${{ steps.ssh.outputs.port }} \
+              deploy/health-check.sh \
+              ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:~/kombify/${{ inputs.service-name }}/health-check.sh
+          fi
+
+      - name: Inject secrets from Doppler
+        if: inputs.doppler-project != ''
+        run: |
+          ssh -i ~/.ssh/deploy_key -p ${{ steps.ssh.outputs.port }} \
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'DEPLOY_SCRIPT'
+          cd ~/kombify/${{ inputs.service-name }}
+
+          # Use Doppler CLI to fetch secrets as .env
+          if command -v doppler &> /dev/null; then
+            DOPPLER_TOKEN="${{ secrets.DOPPLER_TOKEN }}" \
+              doppler secrets download \
+              --project "${{ inputs.doppler-project }}" \
+              --config "${{ inputs.doppler-config }}" \
+              --format env \
+              --no-file > .env
+            echo "Secrets injected from Doppler"
+          else
+            echo "WARNING: Doppler CLI not installed on VPS. Skipping secrets injection."
+            echo "Install with: curl -sL https://cli.doppler.com/install.sh | sh"
+          fi
+          DEPLOY_SCRIPT
+
+      - name: Run pre-deploy command
+        if: inputs.pre-deploy-command != ''
+        run: |
+          ssh -i ~/.ssh/deploy_key -p ${{ steps.ssh.outputs.port }} \
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
+            "cd ~/kombify/${{ inputs.service-name }} && ${{ inputs.pre-deploy-command }}"
+
+      - name: Deploy via docker-compose
+        run: |
+          ssh -i ~/.ssh/deploy_key -p ${{ steps.ssh.outputs.port }} \
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'DEPLOY_SCRIPT'
+          cd ~/kombify/${{ inputs.service-name }}
+
+          # Set image tag
+          export IMAGE_TAG="${{ inputs.image-tag }}"
+
+          # Login to GHCR
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+          # Pull new images
+          docker compose pull
+
+          # Deploy with zero-downtime (recreate only changed services)
+          docker compose up -d --remove-orphans
+
+          # Safe image retention: keep last 5 images, remove older ones
+          # DO NOT use 'docker image prune -f' -- it destroys fallback images!
+          echo "Cleaning old images (keeping last 5)..."
+          docker images --format '{{.Repository}}:{{.Tag}} {{.CreatedAt}}' \
+            | grep -i "${{ inputs.service-name }}" \
+            | sort -k2 -r \
+            | tail -n +6 \
+            | awk '{print $1}' \
+            | xargs -r docker rmi 2>/dev/null || true
+
+          echo "Deployment complete"
+          DEPLOY_SCRIPT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Health check
+        if: inputs.health-check-url != ''
+        run: |
+          echo "Checking health at ${{ inputs.health-check-url }}${{ inputs.health-check-path }}"
+
+          for i in {1..10}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              "${{ inputs.health-check-url }}${{ inputs.health-check-path }}" || echo "000")
+            if [ "$STATUS" = "200" ] || [ "$STATUS" = "302" ]; then
+              echo "Health check passed (HTTP $STATUS)"
+              exit 0
+            fi
+            echo "Attempt $i/10: HTTP $STATUS - waiting 10s..."
+            sleep 10
+          done
+
+          echo "::error::Health check failed after 10 attempts"
+          exit 1
+
+      - name: Deployment summary
+        if: always()
+        run: |
+          echo "### VPS Deployment (SSH)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Host** | \`${{ secrets.VPS_HOST }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Service** | \`${{ inputs.service-name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image Tag** | \`${{ inputs.image-tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Compose File** | \`${{ inputs.compose-file }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Status** | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

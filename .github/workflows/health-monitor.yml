@@ -1,0 +1,253 @@
+# Reusable health monitor for all kombify services
+# Runs every 5 minutes, checks all production subdomains
+# Creates GitHub Issues on failure with health-alert label
+name: Health Monitor
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      verbose:
+        description: 'Enable verbose output'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  check-services:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          # P0 - Critical
+          - name: 'kombify.io'
+            url: 'https://kombify.io'
+            expected_ct: 'text/html'
+            expected_content: 'kombify'
+            version_endpoint: ''
+            priority: 'P0'
+          - name: 'api.kombify.io'
+            url: 'https://api.kombify.io'
+            expected_ct: ''
+            expected_content: ''
+            version_endpoint: '/api/health'
+            priority: 'P0'
+          # P1 - Important
+          - name: 'techstack.kombify.io'
+            url: 'https://techstack.kombify.io'
+            expected_ct: 'text/html'
+            expected_content: 'kombify'
+            version_endpoint: ''
+            priority: 'P1'
+          - name: 'stack.kombify.io'
+            url: 'https://stack.kombify.io'
+            expected_ct: 'text/html'
+            expected_content: ''
+            version_endpoint: ''
+            priority: 'P1'
+          - name: 'simulate.kombify.io'
+            url: 'https://simulate.kombify.io'
+            expected_ct: 'text/html'
+            expected_content: 'kombify'
+            version_endpoint: ''
+            priority: 'P1'
+          - name: 'sim.kombify.io'
+            url: 'https://sim.kombify.io'
+            expected_ct: 'text/html'
+            expected_content: ''
+            version_endpoint: ''
+            priority: 'P1'
+          # P2 - Secondary
+          - name: 'admin.kombify.io'
+            url: 'https://admin.kombify.io'
+            expected_ct: 'text/html'
+            expected_content: ''
+            version_endpoint: ''
+            priority: 'P2'
+          - name: 'stackkits.kombify.io'
+            url: 'https://stackkits.kombify.io'
+            expected_ct: 'text/html'
+            expected_content: ''
+            version_endpoint: ''
+            priority: 'P2'
+
+    steps:
+      - name: Health check
+        id: check
+        run: |
+          URL="${{ matrix.service.url }}"
+          NAME="${{ matrix.service.name }}"
+          EXPECTED_CT="${{ matrix.service.expected_ct }}"
+          EXPECTED_CONTENT="${{ matrix.service.expected_content }}"
+          ERRORS=""
+
+          echo "Checking $NAME at $URL"
+
+          # L1: HTTP reachability (follow redirects, max 15s)
+          HTTP_CODE=$(curl -sL -o /tmp/body -w "%{http_code}" "$URL" \
+            --max-time 15 --connect-timeout 10 2>/dev/null || echo "000")
+
+          if [ "$HTTP_CODE" = "000" ]; then
+            ERRORS="Connection failed (timeout/DNS)"
+          elif [ "$HTTP_CODE" -ge 400 ]; then
+            ERRORS="HTTP $HTTP_CODE"
+          fi
+
+          # L2: Content-Type (only if L1 passed and expected_ct is set)
+          if [ -z "$ERRORS" ] && [ -n "$EXPECTED_CT" ]; then
+            CT=$(curl -sI -L "$URL" --max-time 10 2>/dev/null | grep -i "^content-type:" | head -1)
+            if ! echo "$CT" | grep -qi "$EXPECTED_CT"; then
+              ERRORS="Wrong Content-Type: $CT (expected $EXPECTED_CT)"
+            fi
+          fi
+
+          # L3: Content check (only if L1 passed and expected_content is set)
+          if [ -z "$ERRORS" ] && [ -n "$EXPECTED_CONTENT" ] && [ -f /tmp/body ]; then
+            if ! grep -qi "$EXPECTED_CONTENT" /tmp/body; then
+              ERRORS="Expected content '$EXPECTED_CONTENT' not found in response"
+            fi
+          fi
+
+          # L4: Version endpoint (only if configured)
+          VERSION_EP="${{ matrix.service.version_endpoint }}"
+          if [ -z "$ERRORS" ] && [ -n "$VERSION_EP" ]; then
+            VER_URL="$URL$VERSION_EP"
+            VER_BODY=$(curl -sf "$VER_URL" --max-time 10 2>/dev/null || echo "")
+            if [ -n "$VER_BODY" ]; then
+              VER_STATUS=$(echo "$VER_BODY" | jq -r '.status // empty' 2>/dev/null || echo "")
+              if [ "$VER_STATUS" = "unhealthy" ]; then
+                ERRORS="Version endpoint reports unhealthy: $VER_BODY"
+              fi
+            fi
+          fi
+
+          if [ -n "$ERRORS" ]; then
+            echo "status=unhealthy" >> $GITHUB_OUTPUT
+            echo "errors=$ERRORS" >> $GITHUB_OUTPUT
+            echo "::error::$NAME is UNHEALTHY: $ERRORS"
+          else
+            echo "status=healthy" >> $GITHUB_OUTPUT
+            echo "errors=" >> $GITHUB_OUTPUT
+            echo "$NAME is healthy (HTTP $HTTP_CODE)"
+          fi
+
+          echo "http_code=$HTTP_CODE" >> $GITHUB_OUTPUT
+
+      - name: Create or update issue on failure
+        if: steps.check.outputs.status == 'unhealthy'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const name = '${{ matrix.service.name }}';
+            const priority = '${{ matrix.service.priority }}';
+            const errors = `${{ steps.check.outputs.errors }}`;
+            const httpCode = '${{ steps.check.outputs.http_code }}';
+            const title = `[HEALTH] ${name} is DOWN`;
+
+            // Check for existing open issue
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'health-alert'
+            });
+
+            const existing = issues.find(i => i.title === title);
+            const body = [
+              `## Service Down: ${name}`,
+              '',
+              `| Detail | Value |`,
+              `|--------|-------|`,
+              `| **URL** | ${`${{ matrix.service.url }}`} |`,
+              `| **Priority** | ${priority} |`,
+              `| **HTTP Code** | ${httpCode} |`,
+              `| **Error** | ${errors} |`,
+              `| **Detected** | ${new Date().toISOString()} |`,
+              '',
+              '### Next Steps',
+              '1. Check Azure Container App status: `az containerapp show --name <app> --resource-group rg-kombify-prod`',
+              '2. Check AFD origin health: `az afd origin-group show --profile-name afd-kombify-prod --origin-group-name <og>`',
+              '3. Check VPS fallback: `curl -H "Host: ' + name + '" http://72.62.49.6`',
+              '4. See Recovery Runbook: `docs/RECOVERY_RUNBOOK.md`',
+            ].join('\n');
+
+            if (existing) {
+              // Add comment to existing issue
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body: `Still down at ${new Date().toISOString()}\n\nHTTP ${httpCode}: ${errors}`
+              });
+            } else {
+              // Create new issue
+              const labels = ['health-alert'];
+              if (priority === 'P0') labels.push('priority-critical');
+              else if (priority === 'P1') labels.push('priority-high');
+
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels
+              });
+            }
+
+      - name: Auto-close issue on recovery
+        if: steps.check.outputs.status == 'healthy'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const name = '${{ matrix.service.name }}';
+            const title = `[HEALTH] ${name} is DOWN`;
+
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'health-alert'
+            });
+
+            const existing = issues.find(i => i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body: `Recovered at ${new Date().toISOString()}`
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                state: 'closed',
+                state_reason: 'completed'
+              });
+            }
+
+  # Summary job that runs after all checks
+  summary:
+    runs-on: ubuntu-latest
+    needs: check-services
+    if: always()
+    steps:
+      - name: Generate summary
+        run: |
+          echo "### Health Monitor Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          RESULT="${{ needs.check-services.result }}"
+          if [ "$RESULT" = "success" ]; then
+            echo "All services healthy." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "One or more services are unhealthy. Check individual job logs." >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "_Run at $(date -u '+%Y-%m-%d %H:%M:%S UTC')_" >> $GITHUB_STEP_SUMMARY

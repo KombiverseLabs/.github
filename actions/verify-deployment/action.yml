@@ -1,0 +1,209 @@
+# Reusable composite action: Verify Deployment (L1-L4)
+# Used by deploy-azure, deploy-vps-ssh, deploy-vps-runner, health-monitor
+# Checks go beyond HTTP 200: content-type, expected content, version SHA
+name: "Verify Deployment"
+description: "Deep deployment verification with 4 levels: HTTP, Content-Type, Content, Version SHA"
+
+inputs:
+  url:
+    description: "URL to verify (e.g., https://kombify.io)"
+    required: true
+  expected-status:
+    description: "Expected HTTP status (default: any < 400)"
+    required: false
+    default: ""
+  expected-content-type:
+    description: "Expected Content-Type substring (e.g., text/html, application/json)"
+    required: false
+    default: ""
+  expected-content:
+    description: "Expected string in response body (case-insensitive grep)"
+    required: false
+    default: ""
+  version-endpoint:
+    description: "Path to version endpoint (e.g., /api/health). Appended to url."
+    required: false
+    default: ""
+  version-sha:
+    description: "Expected SHA in version endpoint response (DEPLOY_SHA)"
+    required: false
+    default: ""
+  max-retries:
+    description: "Max retry attempts for initial HTTP check"
+    required: false
+    default: "10"
+  retry-delay:
+    description: "Seconds between retries"
+    required: false
+    default: "10"
+  timeout:
+    description: "curl timeout in seconds"
+    required: false
+    default: "15"
+
+outputs:
+  status:
+    description: "healthy or unhealthy"
+    value: ${{ steps.verify.outputs.status }}
+  errors:
+    description: "Error details if unhealthy"
+    value: ${{ steps.verify.outputs.errors }}
+  http-code:
+    description: "HTTP status code returned"
+    value: ${{ steps.verify.outputs.http_code }}
+  level-reached:
+    description: "Highest verification level passed (L0-L4)"
+    value: ${{ steps.verify.outputs.level_reached }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Verify deployment
+      id: verify
+      shell: bash
+      run: |
+        URL="${{ inputs.url }}"
+        EXPECTED_STATUS="${{ inputs.expected-status }}"
+        EXPECTED_CT="${{ inputs.expected-content-type }}"
+        EXPECTED_CONTENT="${{ inputs.expected-content }}"
+        VERSION_ENDPOINT="${{ inputs.version-endpoint }}"
+        VERSION_SHA="${{ inputs.version-sha }}"
+        MAX_RETRIES="${{ inputs.max-retries }}"
+        RETRY_DELAY="${{ inputs.retry-delay }}"
+        TIMEOUT="${{ inputs.timeout }}"
+
+        ERRORS=""
+        LEVEL="L0"
+        HTTP_CODE="000"
+
+        echo "🔍 Verifying deployment at $URL"
+        echo ""
+
+        # ── L1: HTTP Reachability ──────────────────────────────────
+        echo "── L1: HTTP Reachability ──"
+        PASSED_L1=false
+        for i in $(seq 1 "$MAX_RETRIES"); do
+          HTTP_CODE=$(curl -sL -o /tmp/verify_body -w "%{http_code}" "$URL" \
+            --max-time "$TIMEOUT" --connect-timeout 10 2>/dev/null || echo "000")
+
+          if [ "$HTTP_CODE" = "000" ]; then
+            echo "  Attempt $i/$MAX_RETRIES: Connection failed (timeout/DNS)"
+          elif [ -n "$EXPECTED_STATUS" ]; then
+            if [ "$HTTP_CODE" = "$EXPECTED_STATUS" ]; then
+              PASSED_L1=true
+              break
+            else
+              echo "  Attempt $i/$MAX_RETRIES: HTTP $HTTP_CODE (expected $EXPECTED_STATUS)"
+            fi
+          elif [ "$HTTP_CODE" -lt 400 ]; then
+            PASSED_L1=true
+            break
+          else
+            echo "  Attempt $i/$MAX_RETRIES: HTTP $HTTP_CODE"
+          fi
+
+          if [ "$i" -lt "$MAX_RETRIES" ]; then
+            sleep "$RETRY_DELAY"
+          fi
+        done
+
+        if [ "$PASSED_L1" = "false" ]; then
+          if [ "$HTTP_CODE" = "000" ]; then
+            ERRORS="L1 FAIL: Connection failed after $MAX_RETRIES attempts"
+          else
+            ERRORS="L1 FAIL: HTTP $HTTP_CODE after $MAX_RETRIES attempts"
+          fi
+        else
+          LEVEL="L1"
+          echo "  ✅ L1 passed (HTTP $HTTP_CODE)"
+        fi
+
+        # ── L2: Content-Type ──────────────────────────────────────
+        if [ -z "$ERRORS" ] && [ -n "$EXPECTED_CT" ]; then
+          echo ""
+          echo "── L2: Content-Type ──"
+          CT=$(curl -sI -L "$URL" --max-time "$TIMEOUT" 2>/dev/null \
+            | grep -i "^content-type:" | head -1 | tr -d '\r')
+          if echo "$CT" | grep -qi "$EXPECTED_CT"; then
+            LEVEL="L2"
+            echo "  ✅ L2 passed ($CT)"
+          else
+            ERRORS="L2 FAIL: Content-Type '$CT' does not match expected '$EXPECTED_CT'"
+          fi
+        elif [ -z "$ERRORS" ] && [ -z "$EXPECTED_CT" ]; then
+          LEVEL="L2"
+        fi
+
+        # ── L3: Expected Content ──────────────────────────────────
+        if [ -z "$ERRORS" ] && [ -n "$EXPECTED_CONTENT" ]; then
+          echo ""
+          echo "── L3: Content Check ──"
+          if [ -f /tmp/verify_body ] && grep -qi "$EXPECTED_CONTENT" /tmp/verify_body; then
+            LEVEL="L3"
+            echo "  ✅ L3 passed (found '$EXPECTED_CONTENT' in body)"
+          else
+            ERRORS="L3 FAIL: Expected content '$EXPECTED_CONTENT' not found in response body"
+          fi
+        elif [ -z "$ERRORS" ]; then
+          LEVEL="L3"
+        fi
+
+        # ── L4: Version SHA ───────────────────────────────────────
+        if [ -z "$ERRORS" ] && [ -n "$VERSION_ENDPOINT" ] && [ -n "$VERSION_SHA" ]; then
+          echo ""
+          echo "── L4: Version Endpoint ──"
+          # Build version URL: if endpoint starts with http, use as-is, else append to base
+          if echo "$VERSION_ENDPOINT" | grep -q "^http"; then
+            VERSION_URL="$VERSION_ENDPOINT"
+          else
+            # Strip trailing slash from URL, leading slash from endpoint
+            BASE_URL=$(echo "$URL" | sed 's:/*$::')
+            EP=$(echo "$VERSION_ENDPOINT" | sed 's:^/*::')
+            VERSION_URL="$BASE_URL/$EP"
+          fi
+
+          VER_BODY=$(curl -sf "$VERSION_URL" --max-time "$TIMEOUT" 2>/dev/null || echo "")
+          if [ -z "$VER_BODY" ]; then
+            ERRORS="L4 FAIL: Version endpoint $VERSION_URL not reachable"
+          else
+            # Try to extract version from JSON (.version or .sha or .deploy_sha)
+            VER=$(echo "$VER_BODY" | jq -r '.version // .sha // .deploy_sha // empty' 2>/dev/null || echo "")
+            if [ -z "$VER" ]; then
+              # Fallback: plain text grep
+              if echo "$VER_BODY" | grep -q "$VERSION_SHA"; then
+                VER="$VERSION_SHA"
+              fi
+            fi
+
+            if [ "$VER" = "$VERSION_SHA" ] || echo "$VER" | grep -q "$VERSION_SHA"; then
+              LEVEL="L4"
+              echo "  ✅ L4 passed (version=$VER matches $VERSION_SHA)"
+            else
+              ERRORS="L4 FAIL: Version '$VER' does not match expected '$VERSION_SHA'"
+            fi
+          fi
+        elif [ -z "$ERRORS" ] && ([ -z "$VERSION_ENDPOINT" ] || [ -z "$VERSION_SHA" ]); then
+          # Skip L4 if not configured — still considered a pass
+          if [ -z "$ERRORS" ]; then
+            LEVEL="L4"
+          fi
+        fi
+
+        # ── Results ───────────────────────────────────────────────
+        echo ""
+        rm -f /tmp/verify_body
+
+        if [ -n "$ERRORS" ]; then
+          echo "status=unhealthy" >> $GITHUB_OUTPUT
+          echo "errors=$ERRORS" >> $GITHUB_OUTPUT
+          echo "http_code=$HTTP_CODE" >> $GITHUB_OUTPUT
+          echo "level_reached=$LEVEL" >> $GITHUB_OUTPUT
+          echo "❌ UNHEALTHY: $ERRORS (reached $LEVEL)"
+          exit 1
+        else
+          echo "status=healthy" >> $GITHUB_OUTPUT
+          echo "errors=" >> $GITHUB_OUTPUT
+          echo "http_code=$HTTP_CODE" >> $GITHUB_OUTPUT
+          echo "level_reached=$LEVEL" >> $GITHUB_OUTPUT
+          echo "✅ HEALTHY: All checks passed (reached $LEVEL)"
+        fi
