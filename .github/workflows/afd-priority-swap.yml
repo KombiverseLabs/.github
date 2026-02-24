@@ -1,0 +1,91 @@
+name: AFD Priority Swap
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Service to modify (e.g., kombify-core)'
+        required: true
+        type: choice
+        options:
+          - kombify-core
+          - kombify-api
+          - kombify-me
+          - kombify-admin
+      primary-origin:
+        description: 'Set this origin as Priority 1'
+        required: true
+        type: choice
+        options:
+          - aca       # Azure Container Apps (normal primary)
+          - vps       # VPS (fallback origin)
+      resource-group:
+        description: 'Resource Group the AFD is in'
+        required: false
+        default: 'rg-kombify-prod'
+      afd-profile:
+        description: 'AFD Profile Name'
+        required: false
+        default: 'afd-kombify-prod'
+
+jobs:
+  swap-priorities:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate Inputs
+        run: |
+          echo "Target Service: ${{ inputs.service }}"
+          echo "New Primary: ${{ inputs.primary-origin }}"
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Update AFD Origins Priority
+        env:
+          SERVICE: ${{ inputs.service }}
+          PRIMARY: ${{ inputs.primary-origin }}
+          RG: ${{ inputs.resource-group }}
+          AFD: ${{ inputs.afd-profile }}
+        run: |
+          # Ensure origin-group name matches Bicep logic (e.g., og-core, og-api)
+          # We deduce route mapping from the service name
+          ROUTE_NAME=$(echo $SERVICE | sed 's/kombify-//g')
+          OG_NAME="og-$ROUTE_NAME"
+          
+          ORIGIN_ACA="origin-$ROUTE_NAME"
+          ORIGIN_VPS="origin-$ROUTE_NAME-fallback"
+          
+          if [ "$PRIMARY" = "vps" ]; then
+            echo "::notice::Prioritizing VPS Fallback for $SERVICE"
+            PRIORITY_ACA=2
+            PRIORITY_VPS=1
+          else
+            echo "::notice::Prioritizing Azure Container Apps for $SERVICE"
+            PRIORITY_ACA=1
+            PRIORITY_VPS=2
+          fi
+
+          echo "Updating ACA Origin ($ORIGIN_ACA) -> Priority $PRIORITY_ACA"
+          az afd origin update \
+            --resource-group "$RG" \
+            --profile-name "$AFD" \
+            --origin-group-name "$OG_NAME" \
+            --origin-name "$ORIGIN_ACA" \
+            --priority $PRIORITY_ACA
+
+          echo "Updating VPS Origin ($ORIGIN_VPS) -> Priority $PRIORITY_VPS"
+          az afd origin update \
+            --resource-group "$RG" \
+            --profile-name "$AFD" \
+            --origin-group-name "$OG_NAME" \
+            --origin-name "$ORIGIN_VPS" \
+            --priority $PRIORITY_VPS
+
+          echo "Swap successful."
+
+      - name: Monitor Rollout
+        run: |
+          echo "Priority swap applied successfully."
+          echo "Note: AFD propagation can take a few minutes."
