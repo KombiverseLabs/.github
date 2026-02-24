@@ -1,7 +1,7 @@
 # kombify Unified Deploy Pipeline
 # Orchestrates the full lifecycle: CI Gate → Build (Dual) → Deploy ACA → Verify → Mirror VPS → Verify VPS → Summary
 # Each repo calls this with service-specific parameters.
-name: Build Image (ACR+GHCR) -> Deploy to Azure Container Apps -> HTTP Verification -> Mirror to VPS
+name: kombify Service Deployment
 
 on:
   workflow_call:
@@ -146,6 +146,7 @@ on:
 jobs:
   # ── Step 1: CI Gate ──────────────────────────────────────────
   ci-gate:
+    name: CI Gate for ${{ inputs.service-name }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -190,6 +191,7 @@ jobs:
 
   # ── Step 3: Deploy to Azure Container Apps ───────────────────
   deploy-aca:
+    name: Deploy ${{ inputs.service-name }} -> Azure Container Apps
     needs: build
     uses: ./.github/workflows/deploy-azure.yml
     with:
@@ -209,6 +211,7 @@ jobs:
 
   # ── Step 4: Mirror to VPS ────────────────────────────────────
   mirror-vps:
+    name: Mirror ${{ inputs.service-name }} -> VPS & Verify
     needs: [build, deploy-aca]
     if: inputs.vps-compose-file != ''
     uses: ./.github/workflows/deploy-vps-ssh.yml
