@@ -55,6 +55,13 @@ on:
         required: false
         type: string
         default: ''
+    secrets:
+      ACR_USERNAME:
+        required: false
+      ACR_PASSWORD:
+        required: false
+      GH_PAT:
+        required: false
     outputs:
       image:
         description: 'Full image reference with SHA tag'
@@ -127,6 +134,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ inputs.build-args }}
+          secrets: |
+            GITHUB_TOKEN=${{ secrets.GH_PAT != '' && secrets.GH_PAT || github.token }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
