@@ -51,6 +51,32 @@ on:
         required: false
         type: string
         default: 'cae-kombify-prod'
+
+      min-replicas:
+        description: 'Minimum replicas'
+        required: false
+        type: number
+        default: 1
+      max-replicas:
+        description: 'Maximum replicas'
+        required: false
+        type: number
+        default: 3
+      cpu:
+        description: 'CPU allocation'
+        required: false
+        type: string
+        default: '0.5'
+      memory:
+        description: 'Memory allocation'
+        required: false
+        type: string
+        default: '1Gi'
+      target-port:
+        description: 'Container port'
+        required: false
+        type: number
+        default: 8080
       env-vars:
         description: 'ACA env vars (space-separated KEY=VALUE)'
         required: false
@@ -73,6 +99,11 @@ on:
         required: false
         type: string
         default: 'acrkombifyprod'
+      push-to-acr:
+        description: 'Also push to Azure Container Registry (dual-registry fallback)'
+        required: false
+        type: boolean
+        default: true
       acr-image-name:
         description: 'Image name in ACR'
         required: false
@@ -184,7 +215,7 @@ jobs:
       build-args: ${{ inputs.build-args }}
       platforms: ${{ inputs.platforms }}
       push: true
-      push-to-acr: true
+      push-to-acr: ${{ inputs.push-to-acr }}
       acr-name: ${{ inputs.acr-name }}
       acr-image-name: ${{ inputs.acr-image-name }}
     secrets: inherit
@@ -203,6 +234,11 @@ jobs:
       keyvault-name: ${{ inputs.keyvault-name }}
       keyvault-secrets: ${{ inputs.keyvault-secrets }}
       health-check-path: ${{ inputs.health-endpoint }}
+      min-replicas: ${{ inputs.min-replicas }}
+      max-replicas: ${{ inputs.max-replicas }}
+      cpu: ${{ inputs.cpu }}
+      memory: ${{ inputs.memory }}
+      target-port: ${{ inputs.target-port }}
       expected-content-type: ${{ inputs.expected-content-type }}
       expected-content: ${{ inputs.expected-content }}
       version-endpoint: ${{ inputs.version-endpoint }}

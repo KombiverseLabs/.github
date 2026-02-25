@@ -52,7 +52,7 @@ on:
         description: 'Memory allocation'
         required: false
         type: string
-        default: '1.0Gi'
+        default: '1Gi'
       target-port:
         description: 'Container port'
         required: false
@@ -128,6 +128,30 @@ jobs:
         with:
           keyvault: ${{ inputs.keyvault-name }}
           secrets: ${{ inputs.keyvault-secrets }}
+
+      - name: Ensure ingress target port
+        if: inputs.target-port != 0
+        run: |
+          CURRENT_PORT=$(az containerapp show \
+            --name ${{ inputs.container-app-name }} \
+            --resource-group ${{ inputs.resource-group }} \
+            --query "properties.configuration.ingress.targetPort" -o tsv 2>/dev/null || echo "")
+
+          if [ -z "$CURRENT_PORT" ] || [ "$CURRENT_PORT" = "null" ]; then
+            echo "No ingress configured; skipping target port update."
+            exit 0
+          fi
+
+          if [ "$CURRENT_PORT" = "${{ inputs.target-port }}" ]; then
+            echo "Ingress target port already set to $CURRENT_PORT."
+            exit 0
+          fi
+
+          echo "Updating ingress target port: $CURRENT_PORT -> ${{ inputs.target-port }}"
+          az containerapp ingress update \
+            --name ${{ inputs.container-app-name }} \
+            --resource-group ${{ inputs.resource-group }} \
+            --target-port ${{ inputs.target-port }}
 
       - name: Update Container App
         run: |
