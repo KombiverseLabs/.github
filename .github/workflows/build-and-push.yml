@@ -55,6 +55,11 @@ on:
         required: false
         type: string
         default: ''
+      runner:
+        description: 'Runner label. Falls back to CI_RUNNER org variable, then ubuntu-latest.'
+        required: false
+        type: string
+        default: ''
     secrets:
       ACR_USERNAME:
         required: false
@@ -75,7 +80,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read
       packages: write

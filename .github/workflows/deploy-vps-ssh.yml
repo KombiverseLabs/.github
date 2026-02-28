@@ -43,6 +43,11 @@ on:
         required: false
         type: string
         default: 'prd'
+      runner:
+        description: 'Runner label. Falls back to CI_RUNNER org variable, then ubuntu-latest.'
+        required: false
+        type: string
+        default: ''
     secrets:
       VPS_HOST:
         required: true
@@ -57,7 +62,7 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -88,6 +88,11 @@ on:
         required: false
         type: string
         default: ''
+      runner:
+        description: 'Runner label. Falls back to CI_RUNNER org variable, then ubuntu-latest.'
+        required: false
+        type: string
+        default: ''
     secrets:
       AZURE_CREDENTIALS:
         required: true
@@ -98,7 +103,7 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'ubuntu-latest' }}
     environment: ${{ contains(inputs.container-app-name, 'prod') && 'production' || 'staging' }}
     steps:
       - name: Login to Azure

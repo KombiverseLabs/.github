@@ -156,6 +156,12 @@ on:
         type: string
         default: 'prd'
 
+      runner:
+        description: 'Runner label. Falls back to CI_RUNNER org variable, then ubuntu-latest.'
+        required: false
+        type: string
+        default: ''
+
     secrets:
       AZURE_CREDENTIALS:
         required: true
@@ -178,7 +184,7 @@ jobs:
   # ── Step 1: CI Gate ──────────────────────────────────────────
   ci-gate:
     name: CI Gate for ${{ inputs.service-name }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
       checks: read
@@ -221,6 +227,7 @@ jobs:
       push-to-acr: ${{ inputs.push-to-acr }}
       acr-name: ${{ inputs.acr-name }}
       acr-image-name: ${{ inputs.acr-image-name }}
+      runner: ${{ inputs.runner }}
     secrets: inherit
 
   # ── Step 3: Deploy to Azure Container Apps ───────────────────
@@ -246,6 +253,7 @@ jobs:
       expected-content: ${{ inputs.expected-content }}
       version-endpoint: ${{ inputs.version-endpoint }}
       rollback-on-failure: true
+      runner: ${{ inputs.runner }}
     secrets: inherit
 
   # ── Step 4: Mirror to VPS ────────────────────────────────────
@@ -262,13 +270,14 @@ jobs:
       health-check-path: ${{ inputs.health-endpoint }}
       doppler-project: ${{ inputs.doppler-project }}
       doppler-config: ${{ inputs.doppler-config }}
+      runner: ${{ inputs.runner }}
     secrets: inherit
 
   # ── Step 5: Summary ──────────────────────────────────────────
   summary:
     needs: [build, deploy-aca, mirror-vps]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 2
     steps:
       - name: Generate deployment summary
