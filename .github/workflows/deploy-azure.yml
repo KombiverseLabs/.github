@@ -192,16 +192,9 @@ jobs:
           echo "fqdn=$FQDN" >> $GITHUB_OUTPUT
           echo "FQDN: $FQDN"
 
-      - name: Checkout (for composite action)
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/.github
-          path: .github-actions
-          sparse-checkout: actions/verify-deployment
-
       - name: Deep verification (L1-L4)
         id: health
-        uses: KombiverseLabs/.github/.github-actions/actions/verify-deployment@main
+        uses: KombiverseLabs/.github/actions/verify-deployment@main
         with:
           url: https://${{ steps.fqdn.outputs.fqdn }}${{ inputs.health-check-path }}
           expected-content-type: ${{ inputs.expected-content-type }}
