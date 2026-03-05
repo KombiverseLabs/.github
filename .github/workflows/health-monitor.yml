@@ -166,8 +166,8 @@ jobs:
 
           # ── L4: Health Endpoint ──
           if [ -z "$ERRORS" ] && [ -n "$HEALTH_EP" ]; then
-            # Build URL: strip trailing slash from base, leading slash from endpoint
-            BASE_URL=$(echo "$URL" | sed 's|/[^/]*$||' | sed 's:/*$::')
+            # Build URL: strip trailing slash from base, prepend endpoint
+            BASE_URL=$(echo "$URL" | sed 's:/*$::')
             EP=$(echo "$HEALTH_EP" | sed 's:^/*::')
             HEALTH_URL="$BASE_URL/$EP"
             HEALTH_BODY=$(curl -sf "$HEALTH_URL" --max-time 10 2>/dev/null || echo "")
