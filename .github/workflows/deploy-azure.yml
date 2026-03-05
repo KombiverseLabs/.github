@@ -170,12 +170,19 @@ jobs:
             ENV_ARGS="--set-env-vars $EVALUATED_VARS"
           fi
 
-          echo "Updating Container App..."
-          # Note: This executes the command. We don't echo secrets in logs.
+          # Defensive: image input may contain multiple lines from metadata-action.
+          # Take only the first line and trim whitespace.
+          IMAGE=$(echo "${{ inputs.image }}" | head -1 | tr -d '[:space:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          if [ -z "$IMAGE" ]; then
+            echo "::error::Image reference is empty after sanitization"
+            exit 1
+          fi
+          echo "Updating Container App with image: $IMAGE"
+
           az containerapp update \
             --name ${{ inputs.container-app-name }} \
             --resource-group ${{ inputs.resource-group }} \
-            --image ${{ inputs.image }} \
+            --image "$IMAGE" \
             --min-replicas ${{ inputs.min-replicas }} \
             --max-replicas ${{ inputs.max-replicas }} \
             --cpu ${{ inputs.cpu }} \

@@ -279,6 +279,9 @@ jobs:
     if: always()
     runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 2
+    permissions:
+      issues: write
+      contents: read
     steps:
       - name: Generate deployment summary
         run: |
@@ -294,33 +297,74 @@ jobs:
           echo "**Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
 
       - name: Create issue on failure
-        if: needs.deploy-aca.result == 'failure'
+        if: needs.build.result == 'failure' || needs.deploy-aca.result == 'failure' || needs.mirror-vps.result == 'failure'
         uses: actions/github-script@v7
         with:
           script: |
-            const title = `[DEPLOY FAIL] ${{ inputs.service-name }} deployment failed`;
+            const buildResult = '${{ needs.build.result }}';
+            const acaResult = '${{ needs.deploy-aca.result }}';
+            const vpsResult = '${{ needs.mirror-vps.result }}' || 'skipped';
+
+            // Determine which stage failed
+            let failedStage = 'Unknown';
+            if (buildResult === 'failure') failedStage = 'Build';
+            else if (acaResult === 'failure') failedStage = 'ACA Deploy';
+            else if (vpsResult === 'failure') failedStage = 'VPS Mirror';
+
+            const title = `[DEPLOY FAIL] ${{ inputs.service-name }}: ${failedStage} failed`;
             const body = [
               `## Deployment Failure: ${{ inputs.service-name }}`,
               '',
+              `**Failed Stage:** ${failedStage}`,
+              `**Action Required:** This service is NOT running the latest code.`,
+              '',
               `| Detail | Value |`,
               `|--------|-------|`,
-              `| **Commit** | \`${{ github.sha }}\` |`,
+              `| **Commit** | [\`${{ github.sha }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}) |`,
               `| **Container App** | \`${{ inputs.container-app-name }}\` |`,
-              `| **Build** | ${{ needs.build.result }} |`,
-              `| **ACA Deploy** | ${{ needs.deploy-aca.result }} |`,
-              `| **VPS Mirror** | ${{ needs.mirror-vps.result || 'skipped' }} |`,
+              `| **Build** | ${buildResult === 'failure' ? '**FAILED**' : buildResult} |`,
+              `| **ACA Deploy** | ${acaResult === 'failure' ? '**FAILED**' : acaResult} |`,
+              `| **VPS Mirror** | ${vpsResult === 'failure' ? '**FAILED**' : vpsResult} |`,
+              `| **Triggered by** | @${{ github.actor }} |`,
               `| **Time** | ${new Date().toISOString()} |`,
+              `| **Workflow Run** | [View logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |`,
               '',
-              '### Recovery',
-              '1. Check the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})',
-              '2. ACA should have auto-rolled back to the previous revision',
-              '3. See `docs/RECOVERY_RUNBOOK.md` for escalation'
+              '### Recovery Steps',
+              '1. Check the [workflow run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})',
+              buildResult !== 'failure' ? '2. ACA should have auto-rolled back to the previous healthy revision' : '2. Build failed — no deployment was attempted, previous version still running',
+              '3. Fix the issue and push again, or manually re-trigger the workflow'
             ].join('\n');
 
-            await github.rest.issues.create({
+            // Check if similar open issue already exists to avoid duplicates
+            const { data: existing } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title,
-              body,
-              labels: ['deploy-failure', 'priority-critical']
+              state: 'open',
+              labels: 'deploy-failure',
+              per_page: 10
             });
+            const duplicate = existing.find(i => i.title.includes('${{ inputs.service-name }}'));
+            if (duplicate) {
+              // Add comment to existing issue instead
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: duplicate.number,
+                body: `### Another deployment failure\n\n${body}`
+              });
+              core.warning(`Added comment to existing issue #${duplicate.number}`);
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['deploy-failure', 'priority-critical']
+              });
+            }
+
+      - name: Fail workflow if any stage failed
+        if: needs.build.result == 'failure' || needs.deploy-aca.result == 'failure'
+        run: |
+          echo "::error::Deployment pipeline failed. Check the issue created above."
+          exit 1
