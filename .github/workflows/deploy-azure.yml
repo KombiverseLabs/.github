@@ -239,6 +239,45 @@ jobs:
           echo "::error::Deployment verification failed. Rollback executed."
           exit 1
 
+      # Post-deploy stabilization: wait 90s then recheck.
+      # Catches services that pass initial health check but crash shortly after
+      # (OOM, connection pool exhaustion, config errors on first real request).
+      - name: Stabilization wait (90s)
+        if: steps.health.outcome == 'success'
+        run: |
+          echo "Waiting 90s for stabilization before final recheck..."
+          sleep 90
+
+      - name: Stabilization recheck
+        if: steps.health.outcome == 'success'
+        id: recheck
+        uses: KombiverseLabs/.github/actions/verify-deployment@main
+        with:
+          url: https://${{ steps.fqdn.outputs.fqdn }}${{ inputs.health-check-path }}
+          expected-content-type: ${{ inputs.expected-content-type }}
+          expected-content: ${{ inputs.expected-content }}
+          smoke-test-url: ${{ inputs.smoke-test-url }}
+          smoke-test-content: ${{ inputs.smoke-test-content }}
+          max-retries: '3'
+          retry-delay: '5'
+        continue-on-error: true
+
+      - name: Rollback on stabilization failure
+        if: steps.health.outcome == 'success' && steps.recheck.outcome == 'failure' && inputs.rollback-on-failure && steps.current.outputs.revision != 'none'
+        run: |
+          echo "::error::Service passed initial health check but FAILED stabilization recheck after 90s"
+          echo "::warning::Rolling back to previous revision: ${{ steps.current.outputs.revision }}"
+          az containerapp revision activate \
+            --name ${{ inputs.container-app-name }} \
+            --resource-group ${{ inputs.resource-group }} \
+            --revision ${{ steps.current.outputs.revision }}
+
+      - name: Fail if stabilization failed
+        if: steps.health.outcome == 'success' && steps.recheck.outcome == 'failure'
+        run: |
+          echo "::error::Post-deploy stabilization check failed. Service crashed after initial deploy."
+          exit 1
+
       - name: Deployment summary
         if: always()
         run: |

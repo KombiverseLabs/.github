@@ -1,6 +1,7 @@
-# Reusable health monitor for all kombify services
-# Runs every 5 minutes, checks all production subdomains
-# Creates GitHub Issues on failure with health-alert label
+# kombify Production Health Monitor
+# Runs every 5 minutes, checks all production services with L1-L5 verification
+# Creates/updates GitHub Issues on failure, auto-closes on recovery
+# Tracks response times and detects degraded performance
 name: Health Monitor
 
 on:
@@ -14,65 +15,98 @@ on:
         type: boolean
         default: false
 
+permissions:
+  issues: write
+  contents: read
+
 jobs:
   check-services:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      issues: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         service:
-          # P0 - Critical
+          # P0 - Critical (revenue/auth impacting)
           - name: 'kombify.io'
             url: 'https://kombify.io'
             expected_ct: 'text/html'
             expected_content: 'kombify'
-            version_endpoint: ''
+            smoke_checks: '<html,<script'
+            health_endpoint: ''
             priority: 'P0'
+            response_warn_ms: 3000
           - name: 'api.kombify.io'
             url: 'https://api.kombify.io'
             expected_ct: ''
             expected_content: ''
-            version_endpoint: '/api/health'
+            smoke_checks: ''
+            health_endpoint: ''
             priority: 'P0'
-          # P1 - Important
-          - name: 'techstack.kombify.io'
-            url: 'https://techstack.kombify.io'
-            expected_ct: 'text/html'
-            expected_content: 'kombify'
-            version_endpoint: ''
-            priority: 'P1'
-          - name: 'stack.kombify.io'
-            url: 'https://stack.kombify.io'
-            expected_ct: 'text/html'
-            expected_content: ''
-            version_endpoint: ''
-            priority: 'P1'
+            response_warn_ms: 2000
+
+          # P1 - Important (core product features)
           - name: 'simulate.kombify.io'
             url: 'https://simulate.kombify.io'
             expected_ct: 'text/html'
             expected_content: 'kombify'
-            version_endpoint: ''
+            smoke_checks: '<html,<script'
+            health_endpoint: '/api/v1/health'
             priority: 'P1'
-          - name: 'sim.kombify.io'
-            url: 'https://sim.kombify.io'
+            response_warn_ms: 3000
+          - name: 'ai.kombify.io'
+            url: 'https://ai.kombify.io/health'
+            expected_ct: 'application/json'
+            expected_content: ''
+            smoke_checks: ''
+            health_endpoint: ''
+            priority: 'P1'
+            response_warn_ms: 2000
+          - name: 'techstack.kombify.io'
+            url: 'https://techstack.kombify.io'
+            expected_ct: 'text/html'
+            expected_content: 'kombify'
+            smoke_checks: '<html,<script'
+            health_endpoint: ''
+            priority: 'P1'
+            response_warn_ms: 3000
+          - name: 'stack.kombify.io'
+            url: 'https://stack.kombify.io'
             expected_ct: 'text/html'
             expected_content: ''
-            version_endpoint: ''
+            smoke_checks: '<html'
+            health_endpoint: ''
             priority: 'P1'
+            response_warn_ms: 3000
+
           # P2 - Secondary
+          - name: 'stackkits.kombify.io'
+            url: 'https://stackkits.kombify.io'
+            expected_ct: 'text/html'
+            expected_content: 'StackKits'
+            smoke_checks: '<html,<script'
+            health_endpoint: ''
+            priority: 'P2'
+            response_warn_ms: 5000
           - name: 'admin.kombify.io'
             url: 'https://admin.kombify.io'
             expected_ct: 'text/html'
             expected_content: ''
-            version_endpoint: ''
+            smoke_checks: '<html'
+            health_endpoint: ''
             priority: 'P2'
-          - name: 'stackkits.kombify.io'
-            url: 'https://stackkits.kombify.io'
+            response_warn_ms: 5000
+          - name: 'sim.kombify.io'
+            url: 'https://sim.kombify.io'
             expected_ct: 'text/html'
             expected_content: ''
-            version_endpoint: ''
+            smoke_checks: '<html'
+            health_endpoint: ''
             priority: 'P2'
+            response_warn_ms: 5000
 
     steps:
       - name: Health check
@@ -82,21 +116,40 @@ jobs:
           NAME="${{ matrix.service.name }}"
           EXPECTED_CT="${{ matrix.service.expected_ct }}"
           EXPECTED_CONTENT="${{ matrix.service.expected_content }}"
+          SMOKE_CHECKS="${{ matrix.service.smoke_checks }}"
+          HEALTH_EP="${{ matrix.service.health_endpoint }}"
+          WARN_MS="${{ matrix.service.response_warn_ms }}"
           ERRORS=""
+          WARNINGS=""
 
           echo "Checking $NAME at $URL"
 
-          # L1: HTTP reachability (follow redirects, max 15s)
+          # ── L1: HTTP Reachability + Response Time ──
+          START_MS=$(date +%s%3N)
           HTTP_CODE=$(curl -sL -o /tmp/body -w "%{http_code}" "$URL" \
             --max-time 15 --connect-timeout 10 2>/dev/null || echo "000")
+          END_MS=$(date +%s%3N)
+          RESPONSE_MS=$((END_MS - START_MS))
+
+          echo "response_ms=$RESPONSE_MS" >> $GITHUB_OUTPUT
 
           if [ "$HTTP_CODE" = "000" ]; then
-            ERRORS="Connection failed (timeout/DNS)"
+            ERRORS="Connection failed (timeout/DNS) after ${RESPONSE_MS}ms"
+          elif [ "$HTTP_CODE" -ge 500 ]; then
+            ERRORS="HTTP $HTTP_CODE (server error) after ${RESPONSE_MS}ms"
           elif [ "$HTTP_CODE" -ge 400 ]; then
-            ERRORS="HTTP $HTTP_CODE"
+            ERRORS="HTTP $HTTP_CODE after ${RESPONSE_MS}ms"
+          else
+            echo "  L1: HTTP $HTTP_CODE in ${RESPONSE_MS}ms"
           fi
 
-          # L2: Content-Type (only if L1 passed and expected_ct is set)
+          # Response time warning
+          if [ -z "$ERRORS" ] && [ -n "$WARN_MS" ] && [ "$RESPONSE_MS" -gt "$WARN_MS" ]; then
+            WARNINGS="Slow response: ${RESPONSE_MS}ms (threshold: ${WARN_MS}ms)"
+            echo "  WARNING: $WARNINGS"
+          fi
+
+          # ── L2: Content-Type ──
           if [ -z "$ERRORS" ] && [ -n "$EXPECTED_CT" ]; then
             CT=$(curl -sI -L "$URL" --max-time 10 2>/dev/null | grep -i "^content-type:" | head -1)
             if ! echo "$CT" | grep -qi "$EXPECTED_CT"; then
@@ -104,34 +157,76 @@ jobs:
             fi
           fi
 
-          # L3: Content check (only if L1 passed and expected_content is set)
+          # ── L3: Content Check ──
           if [ -z "$ERRORS" ] && [ -n "$EXPECTED_CONTENT" ] && [ -f /tmp/body ]; then
             if ! grep -qi "$EXPECTED_CONTENT" /tmp/body; then
               ERRORS="Expected content '$EXPECTED_CONTENT' not found in response"
             fi
           fi
 
-          # L4: Version endpoint (only if configured)
-          VERSION_EP="${{ matrix.service.version_endpoint }}"
-          if [ -z "$ERRORS" ] && [ -n "$VERSION_EP" ]; then
-            VER_URL="$URL$VERSION_EP"
-            VER_BODY=$(curl -sf "$VER_URL" --max-time 10 2>/dev/null || echo "")
-            if [ -n "$VER_BODY" ]; then
-              VER_STATUS=$(echo "$VER_BODY" | jq -r '.status // empty' 2>/dev/null || echo "")
-              if [ "$VER_STATUS" = "unhealthy" ]; then
-                ERRORS="Version endpoint reports unhealthy: $VER_BODY"
+          # ── L4: Health Endpoint ──
+          if [ -z "$ERRORS" ] && [ -n "$HEALTH_EP" ]; then
+            # Build URL: strip trailing slash from base, leading slash from endpoint
+            BASE_URL=$(echo "$URL" | sed 's|/[^/]*$||' | sed 's:/*$::')
+            EP=$(echo "$HEALTH_EP" | sed 's:^/*::')
+            HEALTH_URL="$BASE_URL/$EP"
+            HEALTH_BODY=$(curl -sf "$HEALTH_URL" --max-time 10 2>/dev/null || echo "")
+            if [ -z "$HEALTH_BODY" ]; then
+              ERRORS="Health endpoint unreachable: $HEALTH_URL"
+            else
+              HEALTH_STATUS=$(echo "$HEALTH_BODY" | jq -r '.status // empty' 2>/dev/null || echo "")
+              if [ "$HEALTH_STATUS" = "unhealthy" ] || [ "$HEALTH_STATUS" = "degraded" ]; then
+                ERRORS="Health endpoint reports $HEALTH_STATUS: $HEALTH_BODY"
+              else
+                echo "  L4: Health endpoint OK ($HEALTH_STATUS)"
               fi
             fi
           fi
 
+          # ── L5: UI Smoke Test ──
+          if [ -z "$ERRORS" ] && [ -n "$SMOKE_CHECKS" ] && [ -f /tmp/body ]; then
+            BODY_SIZE=$(wc -c < /tmp/body | tr -d ' ')
+
+            # Check for error pages
+            if grep -qi 'Internal Server Error\|500 Error\|Application Error\|INTERNAL_SERVER_ERROR' /tmp/body; then
+              ERRORS="UI returned an error page"
+            fi
+
+            # Check each smoke marker
+            if [ -z "$ERRORS" ]; then
+              IFS=',' read -ra MARKERS <<< "$SMOKE_CHECKS"
+              for MARKER in "${MARKERS[@]}"; do
+                MARKER=$(echo "$MARKER" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                if [ -n "$MARKER" ] && ! grep -qi "$MARKER" /tmp/body; then
+                  ERRORS="UI smoke: '$MARKER' not found in response ($BODY_SIZE bytes)"
+                  break
+                fi
+              done
+            fi
+
+            if [ -z "$ERRORS" ]; then
+              echo "  L5: UI OK ($BODY_SIZE bytes)"
+            fi
+          fi
+
+          rm -f /tmp/body
+
+          # ── Output Results ──
           if [ -n "$ERRORS" ]; then
             echo "status=unhealthy" >> $GITHUB_OUTPUT
             echo "errors=$ERRORS" >> $GITHUB_OUTPUT
+            echo "warnings=$WARNINGS" >> $GITHUB_OUTPUT
             echo "::error::$NAME is UNHEALTHY: $ERRORS"
+          elif [ -n "$WARNINGS" ]; then
+            echo "status=degraded" >> $GITHUB_OUTPUT
+            echo "errors=" >> $GITHUB_OUTPUT
+            echo "warnings=$WARNINGS" >> $GITHUB_OUTPUT
+            echo "::warning::$NAME is DEGRADED: $WARNINGS"
           else
             echo "status=healthy" >> $GITHUB_OUTPUT
             echo "errors=" >> $GITHUB_OUTPUT
-            echo "$NAME is healthy (HTTP $HTTP_CODE)"
+            echo "warnings=" >> $GITHUB_OUTPUT
+            echo "$NAME is healthy (HTTP $HTTP_CODE, ${RESPONSE_MS}ms)"
           fi
 
           echo "http_code=$HTTP_CODE" >> $GITHUB_OUTPUT
@@ -145,9 +240,9 @@ jobs:
             const priority = '${{ matrix.service.priority }}';
             const errors = `${{ steps.check.outputs.errors }}`;
             const httpCode = '${{ steps.check.outputs.http_code }}';
+            const responseMs = '${{ steps.check.outputs.response_ms }}';
             const title = `[HEALTH] ${name} is DOWN`;
 
-            // Check for existing open issue
             const { data: issues } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -156,34 +251,36 @@ jobs:
             });
 
             const existing = issues.find(i => i.title === title);
-            const body = [
-              `## Service Down: ${name}`,
-              '',
-              `| Detail | Value |`,
-              `|--------|-------|`,
-              `| **URL** | ${`${{ matrix.service.url }}`} |`,
-              `| **Priority** | ${priority} |`,
-              `| **HTTP Code** | ${httpCode} |`,
-              `| **Error** | ${errors} |`,
-              `| **Detected** | ${new Date().toISOString()} |`,
-              '',
-              '### Next Steps',
-              '1. Check Azure Container App status: `az containerapp show --name <app> --resource-group rg-kombify-prod`',
-              '2. Check AFD origin health: `az afd origin-group show --profile-name afd-kombify-prod --origin-group-name <og>`',
-              '3. Check VPS fallback: `curl -H "Host: ' + name + '" http://72.62.49.6`',
-              '4. See Recovery Runbook: `docs/RECOVERY_RUNBOOK.md`',
-            ].join('\n');
+            const now = new Date().toISOString();
 
             if (existing) {
-              // Add comment to existing issue
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: existing.number,
-                body: `Still down at ${new Date().toISOString()}\n\nHTTP ${httpCode}: ${errors}`
+                body: `Still down at ${now}\n\nHTTP ${httpCode} (${responseMs}ms): ${errors}`
               });
             } else {
-              // Create new issue
+              const body = [
+                `## Service Down: ${name}`,
+                '',
+                `| Detail | Value |`,
+                `|--------|-------|`,
+                `| **URL** | ${{ matrix.service.url }} |`,
+                `| **Priority** | ${priority} |`,
+                `| **HTTP Code** | ${httpCode} |`,
+                `| **Response Time** | ${responseMs}ms |`,
+                `| **Error** | ${errors} |`,
+                `| **Detected** | ${now} |`,
+                '',
+                '### Recovery Steps',
+                '1. Check Azure Container App: `az containerapp show --name <app> --resource-group rg-kombify-prod`',
+                '2. Check container logs: `az containerapp logs show --name <app> --resource-group rg-kombify-prod`',
+                '3. Check AFD origin health in Azure Portal',
+                '4. Check VPS fallback: `curl -sL https://' + name.replace('.io', '.space') + '`',
+                '5. Re-trigger deploy from GitHub Actions if needed',
+              ].join('\n');
+
               const labels = ['health-alert'];
               if (priority === 'P0') labels.push('priority-critical');
               else if (priority === 'P1') labels.push('priority-high');
@@ -198,7 +295,7 @@ jobs:
             }
 
       - name: Auto-close issue on recovery
-        if: steps.check.outputs.status == 'healthy'
+        if: steps.check.outputs.status == 'healthy' || steps.check.outputs.status == 'degraded'
         uses: actions/github-script@v7
         with:
           script: |
@@ -214,11 +311,12 @@ jobs:
 
             const existing = issues.find(i => i.title === title);
             if (existing) {
+              const responseMs = '${{ steps.check.outputs.response_ms }}';
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: existing.number,
-                body: `Recovered at ${new Date().toISOString()}`
+                body: `Recovered at ${new Date().toISOString()} (${responseMs}ms)`
               });
               await github.rest.issues.update({
                 owner: context.repo.owner,
@@ -229,24 +327,23 @@ jobs:
               });
             }
 
-  # Summary job that runs after all checks
   summary:
     runs-on: ubuntu-latest
     needs: check-services
     if: always()
+    permissions:
+      contents: read
     steps:
       - name: Generate summary
         run: |
           echo "### Health Monitor Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Service | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
 
           RESULT="${{ needs.check-services.result }}"
           if [ "$RESULT" = "success" ]; then
             echo "All services healthy." >> $GITHUB_STEP_SUMMARY
           else
-            echo "One or more services are unhealthy. Check individual job logs." >> $GITHUB_STEP_SUMMARY
+            echo "**One or more services are unhealthy.** Check individual job logs." >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
