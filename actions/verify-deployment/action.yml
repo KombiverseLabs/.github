@@ -1,8 +1,8 @@
-# Reusable composite action: Verify Deployment (L1-L4)
+# Reusable composite action: Verify Deployment (L1-L5)
 # Used by deploy-azure, deploy-vps-ssh, deploy-vps-runner, health-monitor
-# Checks go beyond HTTP 200: content-type, expected content, version SHA
+# Checks go beyond HTTP 200: content-type, expected content, version SHA, UI smoke test
 name: "Verify Deployment"
-description: "Deep deployment verification with 4 levels: HTTP, Content-Type, Content, Version SHA"
+description: "Deep deployment verification with 5 levels: HTTP, Content-Type, Content, Version SHA, UI Smoke Test"
 
 inputs:
   url:
@@ -26,6 +26,14 @@ inputs:
     default: ""
   version-sha:
     description: "Expected SHA in version endpoint response (DEPLOY_SHA)"
+    required: false
+    default: ""
+  smoke-test-url:
+    description: "URL for L5 UI smoke test (e.g., https://kombify.io). Verifies actual frontend renders."
+    required: false
+    default: ""
+  smoke-test-content:
+    description: "Expected strings in the UI page body (comma-separated). All must be present."
     required: false
     default: ""
   max-retries:
@@ -187,6 +195,62 @@ runs:
           if [ -z "$ERRORS" ]; then
             LEVEL="L4"
           fi
+        fi
+
+        # ── L5: UI Smoke Test ────────────────────────────────────
+        SMOKE_URL="${{ inputs.smoke-test-url }}"
+        SMOKE_CONTENT="${{ inputs.smoke-test-content }}"
+        if [ -z "$ERRORS" ] && [ -n "$SMOKE_URL" ]; then
+          echo ""
+          echo "── L5: UI Smoke Test ──"
+          echo "  Testing: $SMOKE_URL"
+
+          SMOKE_HTTP=$(curl -sL -o /tmp/smoke_body -w "%{http_code}" "$SMOKE_URL" \
+            --max-time "$TIMEOUT" --connect-timeout 10 2>/dev/null || echo "000")
+
+          if [ "$SMOKE_HTTP" = "000" ] || [ "$SMOKE_HTTP" -ge 400 ]; then
+            ERRORS="L5 FAIL: UI smoke test returned HTTP $SMOKE_HTTP for $SMOKE_URL"
+          elif [ ! -s /tmp/smoke_body ]; then
+            ERRORS="L5 FAIL: UI smoke test returned empty body for $SMOKE_URL"
+          else
+            BODY_SIZE=$(wc -c < /tmp/smoke_body | tr -d ' ')
+            echo "  Response: HTTP $SMOKE_HTTP, $BODY_SIZE bytes"
+
+            # Check for critical frontend markers (SSR/SPA must have these)
+            if ! grep -qi '<html' /tmp/smoke_body; then
+              ERRORS="L5 FAIL: Response is not HTML (no <html> tag) at $SMOKE_URL"
+            elif ! grep -qi '<script' /tmp/smoke_body && ! grep -qi '<link' /tmp/smoke_body; then
+              ERRORS="L5 FAIL: HTML has no <script> or <link> tags — assets missing at $SMOKE_URL"
+            fi
+
+            # Check for common error pages served by frameworks
+            if [ -z "$ERRORS" ]; then
+              if grep -qi 'Internal Server Error\|500 Error\|Application Error\|INTERNAL_SERVER_ERROR' /tmp/smoke_body; then
+                ERRORS="L5 FAIL: UI returned an error page at $SMOKE_URL"
+              fi
+            fi
+
+            # Check for custom expected content strings (comma-separated)
+            if [ -z "$ERRORS" ] && [ -n "$SMOKE_CONTENT" ]; then
+              IFS=',' read -ra CHECKS <<< "$SMOKE_CONTENT"
+              for CHECK in "${CHECKS[@]}"; do
+                CHECK=$(echo "$CHECK" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                if [ -n "$CHECK" ] && ! grep -qi "$CHECK" /tmp/smoke_body; then
+                  ERRORS="L5 FAIL: Expected UI content '$CHECK' not found at $SMOKE_URL"
+                  break
+                fi
+              done
+            fi
+
+            if [ -z "$ERRORS" ]; then
+              LEVEL="L5"
+              echo "  ✅ L5 passed (UI renders correctly, $BODY_SIZE bytes)"
+            fi
+          fi
+          rm -f /tmp/smoke_body
+        elif [ -z "$ERRORS" ] && [ -z "$SMOKE_URL" ]; then
+          # Skip L5 if not configured
+          true
         fi
 
         # ── Results ───────────────────────────────────────────────

@@ -131,6 +131,16 @@ on:
         required: false
         type: string
         default: ''
+      smoke-test-url:
+        description: 'Public URL for L5 UI smoke test (verifies frontend renders correctly)'
+        required: false
+        type: string
+        default: ''
+      smoke-test-content:
+        description: 'Expected strings in UI page for L5 (comma-separated, all must match)'
+        required: false
+        type: string
+        default: ''
 
       # VPS mirroring
       vps-compose-file:
@@ -252,6 +262,8 @@ jobs:
       expected-content-type: ${{ inputs.expected-content-type }}
       expected-content: ${{ inputs.expected-content }}
       version-endpoint: ${{ inputs.version-endpoint }}
+      smoke-test-url: ${{ inputs.smoke-test-url }}
+      smoke-test-content: ${{ inputs.smoke-test-content }}
       rollback-on-failure: true
       runner: ${{ inputs.runner }}
     secrets: inherit

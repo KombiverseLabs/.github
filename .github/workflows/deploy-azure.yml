@@ -88,6 +88,16 @@ on:
         required: false
         type: string
         default: ''
+      smoke-test-url:
+        description: 'Public URL for L5 UI smoke test (e.g., https://kombify.io). Verifies frontend renders.'
+        required: false
+        type: string
+        default: ''
+      smoke-test-content:
+        description: 'Expected strings in UI page (comma-separated). All must be present for L5 to pass.'
+        required: false
+        type: string
+        default: ''
       runner:
         description: 'Runner label. Falls back to CI_RUNNER org variable, then ubuntu-latest.'
         required: false
@@ -199,7 +209,7 @@ jobs:
           echo "fqdn=$FQDN" >> $GITHUB_OUTPUT
           echo "FQDN: $FQDN"
 
-      - name: Deep verification (L1-L4)
+      - name: Deep verification (L1-L5)
         id: health
         uses: KombiverseLabs/.github/actions/verify-deployment@main
         with:
@@ -208,6 +218,8 @@ jobs:
           expected-content: ${{ inputs.expected-content }}
           version-endpoint: ${{ inputs.version-endpoint }}
           version-sha: ${{ github.sha }}
+          smoke-test-url: ${{ inputs.smoke-test-url }}
+          smoke-test-content: ${{ inputs.smoke-test-content }}
           max-retries: '10'
           retry-delay: '10'
         continue-on-error: true
