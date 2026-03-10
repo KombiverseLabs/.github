@@ -133,7 +133,6 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key -p ${{ steps.ssh.outputs.port }} \
             ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'DEPLOY_SCRIPT'
-          set -e
           cd ~/kombify/${{ inputs.service-name }}
 
           # Set image tag
@@ -143,32 +142,48 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
           # Pull new images
-          docker compose pull
+          docker compose pull || { echo "::error::docker compose pull failed"; exit 1; }
 
           # Stop existing containers to clear stale health state
           docker compose down --timeout 10 2>/dev/null || true
 
           # Start fresh
-          docker compose up -d --remove-orphans
+          docker compose up -d --remove-orphans 2>&1 || true
 
-          # Wait for containers to become healthy (respects start_period)
+          # Wait for containers to become healthy
           echo "Waiting for containers to become healthy..."
-          for i in $(seq 1 12); do
+          for i in $(seq 1 18); do
             sleep 10
-            UNHEALTHY=$(docker compose ps --format json 2>/dev/null | grep -c '"unhealthy"\|"exited"\|"dead"' || true)
-            STARTING=$(docker compose ps --format json 2>/dev/null | grep -c '"starting"\|"health: starting"' || true)
-            if [ "$UNHEALTHY" -gt 0 ]; then
-              echo "::error::Containers unhealthy after ${i}0s:"
+            STATUS=$(docker compose ps --format json 2>/dev/null || true)
+            UNHEALTHY=$(echo "$STATUS" | grep -c '"unhealthy"' || true)
+            EXITED=$(echo "$STATUS" | grep -c '"exited"\|"dead"' || true)
+            if [ "$EXITED" -gt 0 ]; then
+              echo "::error::Containers exited/dead after ${i}0s:"
               docker compose ps
-              docker compose logs --tail 30
+              docker compose logs --tail 50
               exit 1
             fi
-            if [ "$STARTING" -eq 0 ]; then
-              echo "All containers healthy after ${i}0s"
+            if [ "$UNHEALTHY" -gt 0 ]; then
+              echo "Attempt $i/18: some containers unhealthy, waiting..."
+              continue
+            fi
+            RUNNING=$(echo "$STATUS" | grep -c '"running"' || true)
+            TOTAL=$(echo "$STATUS" | grep -c "." || true)
+            if [ "$RUNNING" -eq "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then
+              echo "All $TOTAL containers healthy after ${i}0s"
               break
             fi
-            echo "Attempt $i/12: containers still starting..."
+            echo "Attempt $i/18: $RUNNING/$TOTAL running, waiting..."
           done
+
+          # Final check
+          FINAL_EXITED=$(docker compose ps --format json 2>/dev/null | grep -c '"exited"\|"dead"\|"unhealthy"' || true)
+          if [ "$FINAL_EXITED" -gt 0 ]; then
+            echo "::error::Containers still unhealthy after 3 minutes:"
+            docker compose ps
+            docker compose logs --tail 50
+            exit 1
+          fi
 
           # Safe image retention: keep last 5 images, remove older ones
           # DO NOT use 'docker image prune -f' -- it destroys fallback images!
