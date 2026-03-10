@@ -49,14 +49,6 @@ jobs:
             response_warn_ms: 2000
 
           # P1 - Important (core product features)
-          - name: 'simulate.kombify.io'
-            url: 'https://simulate.kombify.io'
-            expected_ct: 'text/html'
-            expected_content: 'kombify'
-            smoke_checks: '<html,<script'
-            health_endpoint: '/api/v1/health'
-            priority: 'P1'
-            response_warn_ms: 3000
           - name: 'ai.kombify.io'
             url: 'https://ai.kombify.io/health'
             expected_ct: 'application/json'
@@ -65,16 +57,16 @@ jobs:
             health_endpoint: ''
             priority: 'P1'
             response_warn_ms: 2000
-          - name: 'techstack.kombify.io'
-            url: 'https://techstack.kombify.io'
+          - name: 'admin.kombify.io'
+            url: 'https://admin.kombify.io'
             expected_ct: 'text/html'
-            expected_content: 'kombify'
-            smoke_checks: '<html,<script'
+            expected_content: ''
+            smoke_checks: '<html'
             health_endpoint: ''
             priority: 'P1'
             response_warn_ms: 3000
-          - name: 'stack.kombify.io'
-            url: 'https://stack.kombify.io'
+          - name: 'blog.kombify.io'
+            url: 'https://blog.kombify.io'
             expected_ct: 'text/html'
             expected_content: ''
             smoke_checks: '<html'
@@ -83,15 +75,7 @@ jobs:
             response_warn_ms: 3000
 
           # P2 - Secondary
-          - name: 'stackkits.kombify.io'
-            url: 'https://stackkits.kombify.io'
-            expected_ct: 'text/html'
-            expected_content: 'StackKits'
-            smoke_checks: '<html,<script'
-            health_endpoint: ''
-            priority: 'P2'
-            response_warn_ms: 5000
-          - name: 'admin.kombify.io'
+          - name: 'sim.kombify.io'
             url: 'https://admin.kombify.io'
             expected_ct: 'text/html'
             expected_content: ''
@@ -274,10 +258,10 @@ jobs:
                 `| **Detected** | ${now} |`,
                 '',
                 '### Recovery Steps',
-                '1. Check Azure Container App: `az containerapp show --name <app> --resource-group rg-kombify-prod`',
-                '2. Check container logs: `az containerapp logs show --name <app> --resource-group rg-kombify-prod`',
-                '3. Check AFD origin health in Azure Portal',
-                '4. Check VPS fallback: `curl -sL https://' + name.replace('.io', '.space') + '`',
+                '1. SSH to VPS: `ssh kombify-ionos`',
+                '2. Check containers: `docker ps --filter name=' + name.split('.')[0] + '`',
+                '3. Check logs: `docker logs --tail 50 kombify-' + name.split('.')[0] + '`',
+                '4. Restart service: `docker restart kombify-' + name.split('.')[0] + '`',
                 '5. Re-trigger deploy from GitHub Actions if needed',
               ].join('\n');
 

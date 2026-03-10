@@ -1,5 +1,5 @@
 # Reusable workflow: Build Docker image and push to GHCR
-# Called by individual repos after CI passes
+# Called by individual repos as part of their deploy pipeline
 name: Build and Push to GHCR
 
 on:
@@ -29,7 +29,7 @@ on:
         description: 'Target platforms'
         required: false
         type: string
-        default: 'linux/amd64,linux/arm64'
+        default: 'linux/amd64'
       tag-prefix:
         description: 'Tag prefix (e.g., staging-)'
         required: false
@@ -40,31 +40,12 @@ on:
         required: false
         type: boolean
         default: true
-      push-to-acr:
-        description: 'Also push to Azure Container Registry (dual-registry fallback)'
-        required: false
-        type: boolean
-        default: false
-      acr-name:
-        description: 'ACR name (e.g., acrkombifyprod). Used when push-to-acr is true.'
-        required: false
-        type: string
-        default: 'acrkombifyprod'
-      acr-image-name:
-        description: 'Image name in ACR (defaults to image-name input)'
-        required: false
-        type: string
-        default: ''
       runner:
         description: 'Runner label. Falls back to CI_RUNNER org variable, then ubuntu-latest.'
         required: false
         type: string
         default: ''
     secrets:
-      ACR_USERNAME:
-        required: false
-      ACR_PASSWORD:
-        required: false
       GH_PAT:
         required: false
     outputs:
@@ -74,27 +55,21 @@ on:
       digest:
         description: 'Image digest'
         value: ${{ jobs.build.outputs.digest }}
-      acr-image:
-        description: 'Full ACR image reference (if pushed)'
-        value: ${{ jobs.build.outputs.acr_image }}
 
 jobs:
   build:
     runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: write
     outputs:
       image: ${{ steps.single-tag.outputs.image }}
       digest: ${{ steps.build.outputs.digest }}
-      acr_image: ${{ steps.acr-push.outputs.acr_image }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -125,8 +100,6 @@ jobs:
             type=sha,prefix=${{ inputs.tag-prefix }}
             type=raw,value=${{ inputs.tag-prefix }}latest
             type=ref,event=branch,prefix=${{ inputs.tag-prefix }}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
 
       - name: Build and push
         id: build
@@ -147,63 +120,19 @@ jobs:
       - name: Extract single deploy tag
         id: single-tag
         run: |
-          # docker/metadata-action outputs multiple tags (one per line).
-          # Downstream workflows need exactly ONE image reference.
-          # Pick the SHA-tagged image — it's unique and immutable.
           SHA_TAG=$(echo "${{ steps.meta.outputs.tags }}" | grep "sha-" | head -1)
           if [ -z "$SHA_TAG" ]; then
-            # Fallback: first tag
             SHA_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
           fi
           echo "image=$SHA_TAG" >> $GITHUB_OUTPUT
           echo "Deploy tag: $SHA_TAG"
 
-      - name: Login to ACR
-        if: inputs.push && inputs.push-to-acr
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ inputs.acr-name }}.azurecr.io
-          username: ${{ secrets.ACR_USERNAME }}
-          password: ${{ secrets.ACR_PASSWORD }}
-
-      - name: Cross-push to ACR
-        id: acr-push
-        if: inputs.push && inputs.push-to-acr
-        run: |
-          ACR_REGISTRY="${{ inputs.acr-name }}.azurecr.io"
-          ACR_IMG_NAME="${{ inputs.acr-image-name }}"
-          if [ -z "$ACR_IMG_NAME" ]; then
-            ACR_IMG_NAME="${{ inputs.image-name }}"
-          fi
-          if [ -z "$ACR_IMG_NAME" ]; then
-            ACR_IMG_NAME="$(basename ${{ github.repository }})"
-          fi
-
-          SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-7)
-          GHCR_REF="${{ steps.image-name.outputs.name }}:${{ inputs.tag-prefix }}sha-${SHA_SHORT}"
-          ACR_SHA_TAG="${ACR_REGISTRY}/${ACR_IMG_NAME}:sha-${SHA_SHORT}"
-          ACR_LATEST_TAG="${ACR_REGISTRY}/${ACR_IMG_NAME}:${{ inputs.tag-prefix }}latest"
-
-          echo "Cross-tagging GHCR → ACR"
-          echo "  Source: $GHCR_REF"
-          echo "  Target: $ACR_SHA_TAG, $ACR_LATEST_TAG"
-
-          docker buildx imagetools create \
-            --tag "$ACR_SHA_TAG" \
-            --tag "$ACR_LATEST_TAG" \
-            "$GHCR_REF" || echo "::warning::ACR cross-push failed (non-blocking)"
-
-          echo "acr_image=$ACR_SHA_TAG" >> $GITHUB_OUTPUT
-
       - name: Summary
         run: |
           echo "### Docker Image Built" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**GHCR Image:** \`${{ steps.image-name.outputs.name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ steps.image-name.outputs.name }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
-          if [ -n "${{ steps.acr-push.outputs.acr_image }}" ]; then
-            echo "**ACR Image:** \`${{ steps.acr-push.outputs.acr_image }}\`" >> $GITHUB_STEP_SUMMARY
-          fi
           echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
