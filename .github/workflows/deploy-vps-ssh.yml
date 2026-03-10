@@ -133,6 +133,7 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key -p ${{ steps.ssh.outputs.port }} \
             ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'DEPLOY_SCRIPT'
+          set -e
           cd ~/kombify/${{ inputs.service-name }}
 
           # Set image tag
@@ -146,6 +147,18 @@ jobs:
 
           # Deploy with zero-downtime (recreate only changed services)
           docker compose up -d --remove-orphans
+
+          # Verify containers are actually running
+          echo "Verifying container status..."
+          sleep 5
+          FAILED=$(docker compose ps --format json | grep -c '"exited"\|"dead"\|"restarting"' || true)
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::Some containers failed to start:"
+            docker compose ps
+            docker compose logs --tail 20
+            exit 1
+          fi
+          echo "All containers running"
 
           # Safe image retention: keep last 5 images, remove older ones
           # DO NOT use 'docker image prune -f' -- it destroys fallback images!
