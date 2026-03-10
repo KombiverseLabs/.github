@@ -145,20 +145,30 @@ jobs:
           # Pull new images
           docker compose pull
 
-          # Deploy with zero-downtime (recreate only changed services)
+          # Stop existing containers to clear stale health state
+          docker compose down --timeout 10 2>/dev/null || true
+
+          # Start fresh
           docker compose up -d --remove-orphans
 
-          # Verify containers are actually running
-          echo "Verifying container status..."
-          sleep 5
-          FAILED=$(docker compose ps --format json | grep -c '"exited"\|"dead"\|"restarting"' || true)
-          if [ "$FAILED" -gt 0 ]; then
-            echo "::error::Some containers failed to start:"
-            docker compose ps
-            docker compose logs --tail 20
-            exit 1
-          fi
-          echo "All containers running"
+          # Wait for containers to become healthy (respects start_period)
+          echo "Waiting for containers to become healthy..."
+          for i in $(seq 1 12); do
+            sleep 10
+            UNHEALTHY=$(docker compose ps --format json 2>/dev/null | grep -c '"unhealthy"\|"exited"\|"dead"' || true)
+            STARTING=$(docker compose ps --format json 2>/dev/null | grep -c '"starting"\|"health: starting"' || true)
+            if [ "$UNHEALTHY" -gt 0 ]; then
+              echo "::error::Containers unhealthy after ${i}0s:"
+              docker compose ps
+              docker compose logs --tail 30
+              exit 1
+            fi
+            if [ "$STARTING" -eq 0 ]; then
+              echo "All containers healthy after ${i}0s"
+              break
+            fi
+            echo "Attempt $i/12: containers still starting..."
+          done
 
           # Safe image retention: keep last 5 images, remove older ones
           # DO NOT use 'docker image prune -f' -- it destroys fallback images!
