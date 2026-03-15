@@ -61,7 +61,7 @@ jobs:
     name: Pick runner
     uses: KombiverseLabs/.github/.github/workflows/pick-runner.yml@main
     with:
-      preferred: ${{ inputs.runner || 'kombify-ionos' }}
+      preferred: ${{ inputs.runner || 'srv1161760-labs' }}
     secrets: inherit
 
   build:
