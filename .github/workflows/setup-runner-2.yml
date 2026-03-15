@@ -37,13 +37,11 @@ jobs:
             echo "Runner binary already present, skipping download"
           fi
 
-          echo "=== Configuring runner ==="
-          # Remove old config if exists (re-registration)
-          if [ -f "$RUNNER_DIR/.runner" ]; then
-            "$RUNNER_DIR/config.sh" remove --token "$REG_TOKEN" 2>/dev/null || true
-          fi
+          cd "$RUNNER_DIR"
 
-          "$RUNNER_DIR/config.sh" \
+          echo "=== Configuring runner ==="
+          # Remove old config if present (--replace handles re-registration)
+          ./config.sh \
             --url "https://github.com/KombiverseLabs" \
             --token "$REG_TOKEN" \
             --name "srv1161760-labs-2" \
@@ -54,12 +52,10 @@ jobs:
             --replace
 
           echo "=== Installing systemd service ==="
-          # Install as the current user (soul)
-          sudo "$RUNNER_DIR/svc.sh" install soul
+          # svc.sh must be run from inside the runner directory
+          sudo ./svc.sh install soul
           sudo systemctl daemon-reload
-          sudo systemctl enable "actions.runner.KombiverseLabs.srv1161760-labs-2.service" 2>/dev/null || \
-            sudo systemctl enable actions.runner.KombiverseLabs.srv1161760-labs-2
-          sudo systemctl start "actions.runner.KombiverseLabs.srv1161760-labs-2.service" 2>/dev/null || \
-            sudo systemctl start actions.runner.KombiverseLabs.srv1161760-labs-2
+          sudo systemctl enable "actions.runner.KombiverseLabs.srv1161760-labs-2.service"
+          sudo systemctl start  "actions.runner.KombiverseLabs.srv1161760-labs-2.service"
           echo "=== Done ==="
-          sudo systemctl status "actions.runner.KombiverseLabs.srv1161760-labs-2.service" 2>/dev/null | head -10 || true
+          sudo systemctl status "actions.runner.KombiverseLabs.srv1161760-labs-2.service" | head -12
