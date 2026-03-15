@@ -40,16 +40,19 @@ jobs:
           cd "$RUNNER_DIR"
 
           echo "=== Configuring runner ==="
-          # Remove old config if present (--replace handles re-registration)
-          ./config.sh \
-            --url "https://github.com/KombiverseLabs" \
-            --token "$REG_TOKEN" \
-            --name "srv1161760-labs-2" \
-            --labels "self-hosted,Linux,X64,srv1161760,kombify,srv1161760-labs,srv1161760-labs-2" \
-            --runnergroup "Default" \
-            --work "$RUNNER_DIR/_work" \
-            --unattended \
-            --replace
+          if [ -f ".runner" ]; then
+            echo "Runner already configured (.runner exists), skipping config"
+          else
+            ./config.sh \
+              --url "https://github.com/KombiverseLabs" \
+              --token "$REG_TOKEN" \
+              --name "srv1161760-labs-2" \
+              --labels "self-hosted,Linux,X64,srv1161760,kombify,srv1161760-labs,srv1161760-labs-2" \
+              --runnergroup "Default" \
+              --work "$RUNNER_DIR/_work" \
+              --unattended \
+              --replace
+          fi
 
           echo "=== Installing systemd service ==="
           # svc.sh must be run from inside the runner directory
