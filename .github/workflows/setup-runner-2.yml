@@ -5,6 +5,11 @@ name: Setup Runner 2 on srv1161760
 
 on:
   workflow_dispatch:
+    inputs:
+      reg-token:
+        description: "Runner registration token (generate with: gh api -X POST orgs/KombiverseLabs/actions/runners/registration-token --jq .token)"
+        required: true
+        type: string
 
 jobs:
   setup:
@@ -12,21 +17,9 @@ jobs:
     runs-on: srv1161760-labs
     timeout-minutes: 10
     steps:
-      - name: Get registration token
-        id: token
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GH_PAT || github.token }}
-          script: |
-            const { data } = await github.rest.actions.createRegistrationTokenForOrg({
-              org: 'KombiverseLabs',
-            });
-            core.setSecret(data.token);
-            core.setOutput('token', data.token);
-
       - name: Install runner 2
         env:
-          REG_TOKEN: ${{ steps.token.outputs.token }}
+          REG_TOKEN: ${{ inputs.reg-token }}
         run: |
           set -euo pipefail
 
