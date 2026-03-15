@@ -1,0 +1,89 @@
+# Reusable: Runtime runner selection with fallback chain.
+# Queries the GitHub runner API to pick the first available runner.
+# Runs on ubuntu-latest for reliable bootstrapping even when self-hosted is down.
+# Chain (default): kombify-ionos → blacksmith-4vcpu-ubuntu-2204 → ubuntu-latest
+name: Pick Runner
+
+on:
+  workflow_call:
+    inputs:
+      preferred:
+        description: 'Primary runner label (checked first)'
+        required: false
+        type: string
+        default: 'kombify-ionos'
+      fallback:
+        description: 'Secondary runner label'
+        required: false
+        type: string
+        default: 'blacksmith-4vcpu-ubuntu-2204'
+      last-resort:
+        description: 'Final fallback — always available'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    secrets:
+      GH_PAT:
+        required: false
+    outputs:
+      runner:
+        description: 'The selected runner label to use in subsequent jobs'
+        value: ${{ jobs.pick.outputs.runner }}
+
+jobs:
+  pick:
+    name: Select runner
+    runs-on: ubuntu-latest
+    outputs:
+      runner: ${{ steps.select.outputs.runner }}
+    steps:
+      - name: Pick first available runner
+        id: select
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_PAT || github.token }}
+          script: |
+            const chain = [
+              '${{ inputs.preferred }}',
+              '${{ inputs.fallback }}',
+              '${{ inputs.last-resort }}',
+            ].filter(Boolean);
+
+            // Cloud/managed runners are not in the org runner list — treat as always available
+            const isCloudRunner = (label) =>
+              ['ubuntu-latest', 'ubuntu-24.04', 'ubuntu-22.04', 'ubuntu-20.04',
+               'windows-latest', 'macos-latest'].includes(label) ||
+              label.startsWith('blacksmith-');
+
+            let selected = chain[chain.length - 1];
+
+            try {
+              const { data } = await github.rest.actions.listSelfHostedRunnersForOrg({
+                org: context.repo.owner,
+                per_page: 100,
+              });
+
+              for (const label of chain) {
+                if (isCloudRunner(label)) {
+                  selected = label;
+                  core.info(`→ '${label}' is a cloud runner — selecting`);
+                  break;
+                }
+                const online = data.runners.find(r =>
+                  r.status === 'online' &&
+                  r.labels.some(l => l.name === label)
+                );
+                if (online) {
+                  selected = label;
+                  core.info(`✓ '${label}' is online (${online.name})`);
+                  break;
+                }
+                core.info(`✗ '${label}' is offline — trying next`);
+              }
+            } catch (err) {
+              core.warning(`Runner API error: ${err.message}. Using fallback: '${chain[1] || chain[0]}'.`);
+              selected = chain[1] || chain[0];
+            }
+
+            core.info(`\n→ Selected: ${selected}`);
+            core.setOutput('runner', selected);
