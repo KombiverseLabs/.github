@@ -1,0 +1,72 @@
+name: Setup Runner 2 on srv1161760
+# One-shot workflow: run this manually to register a second parallel runner.
+# Runs on the existing srv1161760-labs runner, creates a second runner dir,
+# registers it as srv1161760-labs-2, and installs a systemd service.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup:
+    name: Bootstrap second runner
+    runs-on: srv1161760-labs
+    timeout-minutes: 10
+    steps:
+      - name: Get registration token
+        id: token
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_PAT || github.token }}
+          script: |
+            const { data } = await github.rest.actions.createRegistrationTokenForOrg({
+              org: 'KombiverseLabs',
+            });
+            core.setSecret(data.token);
+            core.setOutput('token', data.token);
+
+      - name: Install runner 2
+        env:
+          REG_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          RUNNER_DIR="$HOME/runners/kombiverse-labs-2"
+          RUNNER_VERSION="2.323.0"
+
+          echo "=== Creating runner directory ==="
+          mkdir -p "$RUNNER_DIR"
+
+          echo "=== Downloading runner package ==="
+          if [ ! -f "$RUNNER_DIR/run.sh" ]; then
+            curl -sL "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
+              | tar -xz -C "$RUNNER_DIR"
+          else
+            echo "Runner binary already present, skipping download"
+          fi
+
+          echo "=== Configuring runner ==="
+          # Remove old config if exists (re-registration)
+          if [ -f "$RUNNER_DIR/.runner" ]; then
+            "$RUNNER_DIR/config.sh" remove --token "$REG_TOKEN" 2>/dev/null || true
+          fi
+
+          "$RUNNER_DIR/config.sh" \
+            --url "https://github.com/KombiverseLabs" \
+            --token "$REG_TOKEN" \
+            --name "srv1161760-labs-2" \
+            --labels "self-hosted,Linux,X64,srv1161760,kombify,srv1161760-labs,srv1161760-labs-2" \
+            --runnergroup "Default" \
+            --work "$RUNNER_DIR/_work" \
+            --unattended \
+            --replace
+
+          echo "=== Installing systemd service ==="
+          # Install as the current user (soul)
+          sudo "$RUNNER_DIR/svc.sh" install soul
+          sudo systemctl daemon-reload
+          sudo systemctl enable "actions.runner.KombiverseLabs.srv1161760-labs-2.service" 2>/dev/null || \
+            sudo systemctl enable actions.runner.KombiverseLabs.srv1161760-labs-2
+          sudo systemctl start "actions.runner.KombiverseLabs.srv1161760-labs-2.service" 2>/dev/null || \
+            sudo systemctl start actions.runner.KombiverseLabs.srv1161760-labs-2
+          echo "=== Done ==="
+          sudo systemctl status "actions.runner.KombiverseLabs.srv1161760-labs-2.service" 2>/dev/null | head -10 || true
