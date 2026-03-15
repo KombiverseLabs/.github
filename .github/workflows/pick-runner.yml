@@ -1,9 +1,8 @@
 # Reusable: Runtime runner selection with fallback chain.
-# Queries the GitHub runner API to pick the first available runner.
-# Runs on ubuntu-latest for reliable bootstrapping even when self-hosted is down.
-# Chain (default): srv1161760-labs (dedicated build server) → blacksmith-4vcpu-ubuntu-2204 → ubuntu-latest
-# NOTE: kombify-ionos is the production host — never use it as a CI runner.
-# ubuntu-latest is always the guaranteed last resort.
+# Bootstraps on srv1161760-labs (self-hosted, budget-free) so this always runs
+# regardless of GitHub Actions billing status.
+# Chain (default): srv1161760-labs → blacksmith-4vcpu-ubuntu-2204 → ubuntu-latest
+# NOTE: kombify-ionos is the production host — never add it to this chain.
 name: Pick Runner
 
 on:
@@ -35,7 +34,9 @@ on:
 jobs:
   pick:
     name: Select runner
-    runs-on: ubuntu-latest
+    # Runs on self-hosted srv1161760-labs — no budget consumed, works when billing is out.
+    # If srv1161760 is offline, jobs queue until it recovers (it is a dedicated build VPS).
+    runs-on: srv1161760-labs
     timeout-minutes: 5
     outputs:
       runner: ${{ steps.select.outputs.runner }}
