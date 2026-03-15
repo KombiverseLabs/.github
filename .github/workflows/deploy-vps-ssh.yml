@@ -44,7 +44,7 @@ on:
         type: string
         default: 'prd'
       runner:
-        description: 'Runner label. Falls back to CI_RUNNER org variable, then ubuntu-latest.'
+        description: 'Preferred runner label. Passed into fallback chain: self-hosted → Blacksmith → ubuntu-latest.'
         required: false
         type: string
         default: ''
@@ -61,8 +61,16 @@ on:
         required: false
 
 jobs:
+  pick-runner:
+    name: Pick runner
+    uses: KombiverseLabs/.github/.github/workflows/pick-runner.yml@main
+    with:
+      preferred: ${{ inputs.runner || 'kombify-ionos' }}
+    secrets: inherit
+
   deploy:
-    runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'ubuntu-latest' }}
+    needs: [pick-runner]
+    runs-on: ${{ needs.pick-runner.outputs.runner }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -106,8 +114,6 @@ jobs:
           ssh -i ~/.ssh/deploy_key -p ${{ steps.ssh.outputs.port }} \
             ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'DEPLOY_SCRIPT'
           cd ~/kombify/${{ inputs.service-name }}
-
-          # Use Doppler CLI to fetch secrets as .env
           if command -v doppler &> /dev/null; then
             DOPPLER_TOKEN="${{ secrets.DOPPLER_TOKEN }}" \
               doppler secrets download \
@@ -118,7 +124,6 @@ jobs:
             echo "Secrets injected from Doppler"
           else
             echo "WARNING: Doppler CLI not installed on VPS. Skipping secrets injection."
-            echo "Install with: curl -sL https://cli.doppler.com/install.sh | sh"
           fi
           DEPLOY_SCRIPT
 
@@ -134,23 +139,12 @@ jobs:
           ssh -i ~/.ssh/deploy_key -p ${{ steps.ssh.outputs.port }} \
             ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'DEPLOY_SCRIPT'
           cd ~/kombify/${{ inputs.service-name }}
-
-          # Set image tag
           export IMAGE_TAG="${{ inputs.image-tag }}"
-
-          # Login to GHCR
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-          # Pull new images
           docker compose pull || { echo "::error::docker compose pull failed"; exit 1; }
-
-          # Stop existing containers to clear stale health state
           docker compose down --timeout 10 2>/dev/null || true
-
-          # Start fresh
           docker compose up -d --remove-orphans 2>&1 || true
 
-          # Wait for containers to become healthy
           echo "Waiting for containers to become healthy..."
           for i in $(seq 1 18); do
             sleep 10
@@ -158,13 +152,13 @@ jobs:
             UNHEALTHY=$(echo "$STATUS" | grep -c '"unhealthy"' || true)
             EXITED=$(echo "$STATUS" | grep -c '"exited"\|"dead"' || true)
             if [ "$EXITED" -gt 0 ]; then
-              echo "::error::Containers exited/dead after ${i}0s:"
+              echo "::error::Containers exited after ${i}0s:"
               docker compose ps
               docker compose logs --tail 50
               exit 1
             fi
             if [ "$UNHEALTHY" -gt 0 ]; then
-              echo "Attempt $i/18: some containers unhealthy, waiting..."
+              echo "Attempt $i/18: unhealthy, waiting..."
               continue
             fi
             RUNNING=$(echo "$STATUS" | grep -c '"running"' || true)
@@ -176,7 +170,6 @@ jobs:
             echo "Attempt $i/18: $RUNNING/$TOTAL running, waiting..."
           done
 
-          # Final check
           FINAL_EXITED=$(docker compose ps --format json 2>/dev/null | grep -c '"exited"\|"dead"\|"unhealthy"' || true)
           if [ "$FINAL_EXITED" -gt 0 ]; then
             echo "::error::Containers still unhealthy after 3 minutes:"
@@ -185,8 +178,6 @@ jobs:
             exit 1
           fi
 
-          # Safe image retention: keep last 5 images, remove older ones
-          # DO NOT use 'docker image prune -f' -- it destroys fallback images!
           echo "Cleaning old images (keeping last 5)..."
           docker images --format '{{.Repository}}:{{.Tag}} {{.CreatedAt}}' \
             | grep -i "${{ inputs.service-name }}" \
@@ -205,7 +196,6 @@ jobs:
         if: inputs.health-check-url != ''
         run: |
           echo "Checking health at ${{ inputs.health-check-url }}${{ inputs.health-check-path }}"
-
           for i in {1..10}; do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
               "${{ inputs.health-check-url }}${{ inputs.health-check-path }}" || echo "000")
@@ -216,7 +206,6 @@ jobs:
             echo "Attempt $i/10: HTTP $STATUS - waiting 10s..."
             sleep 10
           done
-
           echo "::error::Health check failed after 10 attempts"
           exit 1
 
@@ -230,6 +219,7 @@ jobs:
           echo "| **Host** | \`${{ secrets.VPS_HOST }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Service** | \`${{ inputs.service-name }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Image Tag** | \`${{ inputs.image-tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Runner** | \`${{ needs.pick-runner.outputs.runner }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Compose File** | \`${{ inputs.compose-file }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Status** | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
 
