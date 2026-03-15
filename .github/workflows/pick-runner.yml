@@ -1,7 +1,8 @@
 # Reusable: Runtime runner selection with fallback chain.
 # Queries the GitHub runner API to pick the first available runner.
 # Runs on ubuntu-latest for reliable bootstrapping even when self-hosted is down.
-# Chain (default): kombify-ionos → blacksmith-4vcpu-ubuntu-2204 → ubuntu-latest
+# Chain (default): srv1161760-labs (dedicated build server) → blacksmith-4vcpu-ubuntu-2204 → ubuntu-latest
+# NOTE: kombify-ionos is the production host — never use it as a CI runner.
 # ubuntu-latest is always the guaranteed last resort.
 name: Pick Runner
 
@@ -12,7 +13,7 @@ on:
         description: 'Primary runner label (checked first)'
         required: false
         type: string
-        default: 'kombify-ionos'
+        default: 'srv1161760-labs'
       fallback:
         description: 'Secondary runner label'
         required: false
