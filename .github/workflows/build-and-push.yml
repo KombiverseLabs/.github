@@ -41,7 +41,7 @@ on:
         type: boolean
         default: true
       runner:
-        description: 'Runner label. Falls back to CI_RUNNER org variable, then ubuntu-latest.'
+        description: 'Preferred runner label. Passed into fallback chain: self-hosted → Blacksmith → ubuntu-latest.'
         required: false
         type: string
         default: ''
@@ -57,8 +57,16 @@ on:
         value: ${{ jobs.build.outputs.digest }}
 
 jobs:
+  pick-runner:
+    name: Pick runner
+    uses: KombiverseLabs/.github/.github/workflows/pick-runner.yml@main
+    with:
+      preferred: ${{ inputs.runner || 'kombify-ionos' }}
+    secrets: inherit
+
   build:
-    runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'ubuntu-latest' }}
+    needs: [pick-runner]
+    runs-on: ${{ needs.pick-runner.outputs.runner }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -132,6 +140,7 @@ jobs:
           echo "### Docker Image Built" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Image:** \`${{ steps.image-name.outputs.name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Runner:** \`${{ needs.pick-runner.outputs.runner }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
