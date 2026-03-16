@@ -34,6 +34,11 @@ on:
         required: false
         type: boolean
         default: true
+      runner:
+        description: 'Runner label to execute the deployment on'
+        required: false
+        type: string
+        default: 'srv1161760-labs'
     secrets:
       DOPPLER_TOKEN:
         description: 'Doppler project service token (read-only, project-scoped)'
@@ -45,7 +50,7 @@ on:
 jobs:
   deploy:
     name: Deploy to Coolify
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 10
 
     steps:

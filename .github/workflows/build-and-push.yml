@@ -25,6 +25,11 @@ on:
         required: false
         type: string
         default: ''
+      doppler-build-secrets:
+        description: 'Multiline list of Doppler secrets to expose to Docker as BuildKit secrets. Supports TARGET=PRIMARY|FALLBACK alias syntax.'
+        required: false
+        type: string
+        default: ''
       platforms:
         description: 'Target platforms'
         required: false
@@ -47,6 +52,8 @@ on:
         default: ''
     secrets:
       GH_PAT:
+        required: false
+      DOPPLER_TOKEN:
         required: false
     outputs:
       image:
@@ -78,6 +85,77 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install Doppler CLI
+        if: inputs.doppler-build-secrets != ''
+        run: |
+          if command -v doppler >/dev/null 2>&1; then
+            exit 0
+          fi
+          curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
+            'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' \
+            | sudo gpg --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] \
+            https://packages.doppler.com/public/cli/deb/debian any-version main" \
+            | sudo tee /etc/apt/sources.list.d/doppler-cli.list
+          sudo apt-get update -qq && sudo apt-get install -y doppler
+
+      - name: Resolve Doppler build secrets
+        if: inputs.doppler-build-secrets != ''
+        id: doppler-build-secrets
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          REQUESTED_SECRETS: ${{ inputs.doppler-build-secrets }}
+        run: |
+          if [ -z "$DOPPLER_TOKEN" ]; then
+            echo "DOPPLER_TOKEN is required when doppler-build-secrets is set" >&2
+            exit 1
+          fi
+
+          doppler secrets download --no-file --format json > /tmp/doppler-build-secrets.json
+
+          python3 <<'PYEOF'
+          import json
+          import os
+          import sys
+
+          requested = [line.strip() for line in os.environ['REQUESTED_SECRETS'].splitlines() if line.strip()]
+          with open('/tmp/doppler-build-secrets.json', 'r', encoding='utf-8') as handle:
+              secret_map = json.load(handle)
+
+          resolved = []
+          missing = []
+
+          for item in requested:
+              if '=' in item:
+                  target, candidates = item.split('=', 1)
+                  target = target.strip()
+                  candidate_names = [name.strip() for name in candidates.split('|') if name.strip()]
+              else:
+                  target = item
+                  candidate_names = [item]
+
+              value = next((str(secret_map.get(name, '')).strip() for name in candidate_names if str(secret_map.get(name, '')).strip()), '')
+              if not value:
+                  missing.append(item)
+                  continue
+
+              resolved.append((target, value))
+
+          if missing:
+              print(f"Missing required Doppler build secrets: {', '.join(missing)}", file=sys.stderr)
+              raise SystemExit(1)
+
+          lines = []
+          for target, value in resolved:
+              print(f"::add-mask::{value}")
+              lines.append(f"{target}={value}")
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
+              print('docker_secrets<<EOF', file=handle)
+              print('\n'.join(lines), file=handle)
+              print('EOF', file=handle)
+          PYEOF
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -122,6 +200,7 @@ jobs:
           build-args: ${{ inputs.build-args }}
           secrets: |
             GITHUB_TOKEN=${{ secrets.GH_PAT != '' && secrets.GH_PAT || github.token }}
+            ${{ steps.doppler-build-secrets.outputs.docker_secrets }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
