@@ -8,8 +8,10 @@
 # jobs — so actual build / deploy work runs on srv1161760-labs (self-hosted,
 # zero billed minutes).  If srv1161760 is offline the fallback is ubuntu-latest.
 #
-# Blacksmith is intentionally NOT in the default chain — it is a paid cloud
-# runner service that would be billed to the org.
+# IMPORTANT: The default github.token does NOT have read:org scope, so
+# listSelfHostedRunnersForOrg will fail unless GH_PAT is provided.
+# If no GH_PAT is set, the preferred runner label is used directly (optimistic).
+# This avoids always falling back to ubuntu-latest when the runner IS online.
 #
 # Chain (default): srv1161760-labs → ubuntu-latest
 # NOTE: kombify-ionos is the production host — never add it to this chain.
@@ -74,7 +76,14 @@ jobs:
                'windows-latest', 'macos-latest'].includes(label) ||
               label.startsWith('blacksmith-');
 
-            let selected = 'ubuntu-latest';
+            // If preferred is already a cloud runner, skip the API call entirely
+            if (isCloudRunner(chain[0])) {
+              core.info(`→ '${chain[0]}' is a cloud runner — selecting directly`);
+              core.setOutput('runner', chain[0]);
+              return;
+            }
+
+            let selected = chain[0]; // Optimistic: assume preferred is up
 
             try {
               const { data } = await github.rest.actions.listSelfHostedRunnersForOrg({
@@ -82,6 +91,7 @@ jobs:
                 per_page: 100,
               });
 
+              selected = 'ubuntu-latest'; // reset for verified selection
               for (const label of chain) {
                 if (isCloudRunner(label)) {
                   selected = label;
@@ -100,8 +110,10 @@ jobs:
                 core.info(`✗ '${label}' is offline — trying next`);
               }
             } catch (err) {
-              core.warning(`Runner API error: ${err.message}. Using fallback: '${chain[1] || 'ubuntu-latest'}'.`);
-              selected = chain[1] || 'ubuntu-latest';
+              // No GH_PAT or token lacks read:org — use optimistic preferred label.
+              // If preferred runner is truly offline the job will queue until it comes
+              // online (or timeout), which is better than always billing ubuntu-latest.
+              core.warning(`Runner API unavailable (${err.message}) — using preferred '${selected}' optimistically`);
             }
 
             core.info(`\n→ Selected: ${selected}`);
