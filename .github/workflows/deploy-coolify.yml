@@ -56,9 +56,10 @@ jobs:
     steps:
       - name: Install Doppler CLI
         run: |
+          sudo mkdir -p /usr/share/keyrings
           curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
             'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' \
-            | sudo gpg --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
+            | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] \
             https://packages.doppler.com/public/cli/deb/debian any-version main" \
             | sudo tee /etc/apt/sources.list.d/doppler-cli.list
