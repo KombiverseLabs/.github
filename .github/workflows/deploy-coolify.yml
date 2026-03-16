@@ -1,6 +1,10 @@
 # Reusable workflow: Deploy to Coolify (SaaS)
 # Fetches env vars from Doppler, syncs to Coolify, then triggers redeploy.
 # Supports both application and service resource types.
+#
+# Secret requirements (set at repo level — see docs/CI_CD.md):
+#   DOPPLER_TOKEN     — project-scoped service token (read-only)
+#   COOLIFY_API_TOKEN — Coolify API key (org-level GitHub secret)
 name: Deploy to Coolify
 
 on:
@@ -14,7 +18,7 @@ on:
         description: 'Coolify resource type: application or service'
         required: false
         type: string
-        default: 'application'
+        default: 'service'
       image-tag:
         description: 'Docker image tag to deploy'
         required: false
@@ -29,13 +33,13 @@ on:
         description: 'Force rebuild even if no changes'
         required: false
         type: boolean
-        default: false
+        default: true
     secrets:
       DOPPLER_TOKEN:
-        description: 'Doppler service token for this application'
+        description: 'Doppler project service token (read-only, project-scoped)'
         required: true
       COOLIFY_API_TOKEN:
-        description: 'Coolify API token'
+        description: 'Coolify API token (org-level secret: COOLIFY_API_TOKEN)'
         required: true
 
 jobs:
@@ -123,7 +127,7 @@ jobs:
           PYEOF
 
       - name: Update image tag
-        if: inputs.image-tag != 'latest'
+        if: inputs.resource-type == 'application' && inputs.image-tag != 'latest'
         env:
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
           RESOURCE_UUID: ${{ inputs.resource-uuid }}
@@ -135,6 +139,7 @@ jobs:
             -d "{\"docker_registry_image_tag\": \"${IMAGE_TAG}\"}" | python3 -m json.tool
 
       - name: Trigger Coolify deployment
+        id: deploy
         env:
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
           RESOURCE_UUID: ${{ inputs.resource-uuid }}
@@ -143,38 +148,54 @@ jobs:
           FORCE_FLAG=$([ "$FORCE" = "true" ] && echo "true" || echo "false")
           RESP=$(curl -s "https://app.coolify.io/api/v1/deploy?uuid=${RESOURCE_UUID}&force=${FORCE_FLAG}" \
             -H "Authorization: Bearer ${COOLIFY_TOKEN}")
-          echo "$RESP" | python3 -m json.tool
+          echo "Deploy response: $RESP"
+          # Services return no deployment_uuid; that's OK — we wait via status check
           DEPLOY_UUID=$(echo "$RESP" | python3 -c "
           import sys, json
           d = json.load(sys.stdin)
           deps = d.get('deployments', [{}])
           print(deps[0].get('deployment_uuid', ''))
-          " 2>/dev/null)
+          " 2>/dev/null || true)
           echo "deployment_uuid=${DEPLOY_UUID}" >> $GITHUB_OUTPUT
-        id: deploy
 
-      - name: Wait for deployment to complete
+      - name: Wait for service to become healthy
         env:
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          RESOURCE_UUID: ${{ inputs.resource-uuid }}
+          RESOURCE_TYPE: ${{ inputs.resource-type }}
           DEPLOY_UUID: ${{ steps.deploy.outputs.deployment_uuid }}
         run: |
-          if [ -z "$DEPLOY_UUID" ]; then
-            echo "No deployment UUID, skipping wait"
-            exit 0
+          echo "Waiting 20s for Coolify to pull image and restart..."
+          sleep 20
+
+          # If we have a deployment UUID, poll it
+          if [ -n "$DEPLOY_UUID" ]; then
+            for i in $(seq 1 24); do
+              sleep 10
+              STATUS=$(curl -s "https://app.coolify.io/api/v1/deployments/${DEPLOY_UUID}" \
+                -H "Authorization: Bearer ${COOLIFY_TOKEN}" \
+                | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','unknown'))" 2>/dev/null || echo "unknown")
+              echo "  [${i}] deployment status: $STATUS"
+              case "$STATUS" in
+                finished) echo "✅ Deployment complete"; exit 0 ;;
+                error|failed) echo "❌ Deployment failed"; exit 1 ;;
+              esac
+            done
+          else
+            # Service type: poll service status endpoint
+            for i in $(seq 1 12); do
+              sleep 10
+              STATUS=$(curl -s "https://app.coolify.io/api/v1/services/${RESOURCE_UUID}" \
+                -H "Authorization: Bearer ${COOLIFY_TOKEN}" \
+                | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','unknown'))" 2>/dev/null || echo "unknown")
+              echo "  [${i}] service status: $STATUS"
+              case "$STATUS" in
+                running) echo "✅ Service is running"; exit 0 ;;
+                exited|error) echo "❌ Service failed to start"; exit 1 ;;
+              esac
+            done
+            echo "⚠️  Service status check timed out — check Coolify dashboard"
           fi
-          echo "Waiting for deployment ${DEPLOY_UUID}..."
-          for i in $(seq 1 30); do
-            sleep 10
-            STATUS=$(curl -s "https://app.coolify.io/api/v1/deployments/${DEPLOY_UUID}" \
-              -H "Authorization: Bearer ${COOLIFY_TOKEN}" \
-              | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','unknown'))" 2>/dev/null)
-            echo "  [${i}] status: $STATUS"
-            case "$STATUS" in
-              finished|running:healthy) echo "✅ Deployed successfully"; exit 0 ;;
-              error|failed)             echo "❌ Deployment failed";      exit 1 ;;
-            esac
-          done
-          echo "⚠️  Deployment still in progress after 5 minutes"
 
       - name: Health check
         if: inputs.health-check-url != ''
