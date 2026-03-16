@@ -1,19 +1,21 @@
-# Reusable: Runtime runner selection with fallback chain.
+# Reusable: Runtime runner selection.
 #
 # HOW IT WORKS
 # ────────────
-# The bootstrap `pick` job always runs on ubuntu-latest (guaranteed available,
-# spends ~10 s of hosted minutes just for runner selection).  It then checks
-# which self-hosted runner is online and outputs that label for all subsequent
-# jobs — so actual build / deploy work runs on srv1161760-labs (self-hosted,
-# zero billed minutes).  If srv1161760 is offline the fallback is ubuntu-latest.
+# The `pick` job runs ON the preferred runner itself (srv1161760-labs by
+# default).  This guarantees that runner selection NEVER consumes
+# GitHub-hosted minutes — an exhausted Actions budget can never block
+# the pipeline.
 #
-# IMPORTANT: The default github.token does NOT have read:org scope, so
-# listSelfHostedRunnersForOrg will fail unless GH_PAT is provided.
-# If no GH_PAT is set, the preferred runner label is used directly (optimistic).
-# This avoids always falling back to ubuntu-latest when the runner IS online.
+# If the preferred runner is offline the job queues until it recovers.
+# It will NOT fall back to a hosted runner automatically; automatic
+# fallback to ubuntu-latest would re-introduce hosted-minute consumption
+# and break builds whenever the budget is zero.
 #
-# Chain (default): srv1161760-labs → ubuntu-latest
+# To explicitly use a cloud runner, pass preferred: 'ubuntu-latest'.
+# That is a conscious, per-caller decision that accepts budget dependency.
+#
+# Chain (default): srv1161760-labs (self-hosted, zero billed minutes)
 # NOTE: kombify-ionos is the production host — never add it to this chain.
 name: Pick Runner
 
@@ -21,20 +23,10 @@ on:
   workflow_call:
     inputs:
       preferred:
-        description: 'Primary runner label (checked first)'
+        description: 'Runner label to use. Defaults to srv1161760-labs (self-hosted).'
         required: false
         type: string
         default: 'srv1161760-labs'
-      fallback:
-        description: 'Secondary runner label'
-        required: false
-        type: string
-        default: 'ubuntu-latest'
-      last-resort:
-        description: 'Final fallback — always available (do not remove)'
-        required: false
-        type: string
-        default: 'ubuntu-latest'
     secrets:
       GH_PAT:
         required: false
@@ -46,75 +38,16 @@ on:
 jobs:
   pick:
     name: Select runner
-    # Always runs on ubuntu-latest so the bootstrap itself is guaranteed to
-    # execute even when srv1161760 is offline.  Actual build/deploy jobs are
-    # dispatched to srv1161760-labs (self-hosted) when it is online.
-    runs-on: ubuntu-latest
+    # Run ON the preferred runner so this job itself never consumes
+    # GitHub-hosted minutes.  Budget exhaustion cannot block the pipeline.
+    runs-on: ${{ inputs.preferred || 'srv1161760-labs' }}
     timeout-minutes: 5
     outputs:
       runner: ${{ steps.select.outputs.runner }}
     steps:
-      - name: Pick first available runner
+      - name: Output selected runner
         id: select
-        timeout-minutes: 4
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GH_PAT || github.token }}
-          script: |
-            const chain = [
-              '${{ inputs.preferred }}',
-              '${{ inputs.fallback }}',
-              '${{ inputs.last-resort }}',
-            ].filter(Boolean);
-
-            // Ensure ubuntu-latest is always the final entry (guaranteed fallback)
-            if (!chain.includes('ubuntu-latest')) chain.push('ubuntu-latest');
-
-            // Cloud/managed runners are not in the org runner list — treat as always available
-            const isCloudRunner = (label) =>
-              ['ubuntu-latest', 'ubuntu-24.04', 'ubuntu-22.04', 'ubuntu-20.04',
-               'windows-latest', 'macos-latest'].includes(label) ||
-              label.startsWith('blacksmith-');
-
-            // If preferred is already a cloud runner, skip the API call entirely
-            if (isCloudRunner(chain[0])) {
-              core.info(`→ '${chain[0]}' is a cloud runner — selecting directly`);
-              core.setOutput('runner', chain[0]);
-              return;
-            }
-
-            let selected = chain[0]; // Optimistic: assume preferred is up
-
-            try {
-              const { data } = await github.rest.actions.listSelfHostedRunnersForOrg({
-                org: context.repo.owner,
-                per_page: 100,
-              });
-
-              selected = 'ubuntu-latest'; // reset for verified selection
-              for (const label of chain) {
-                if (isCloudRunner(label)) {
-                  selected = label;
-                  core.info(`→ '${label}' is a cloud runner — selecting`);
-                  break;
-                }
-                const online = data.runners.find(r =>
-                  r.status === 'online' &&
-                  r.labels.some(l => l.name === label)
-                );
-                if (online) {
-                  selected = label;
-                  core.info(`✓ '${label}' is online (${online.name})`);
-                  break;
-                }
-                core.info(`✗ '${label}' is offline — trying next`);
-              }
-            } catch (err) {
-              // No GH_PAT or token lacks read:org — use optimistic preferred label.
-              // If preferred runner is truly offline the job will queue until it comes
-              // online (or timeout), which is better than always billing ubuntu-latest.
-              core.warning(`Runner API unavailable (${err.message}) — using preferred '${selected}' optimistically`);
-            }
-
-            core.info(`\n→ Selected: ${selected}`);
-            core.setOutput('runner', selected);
+        run: |
+          RUNNER="${{ inputs.preferred || 'srv1161760-labs' }}"
+          echo "runner=$RUNNER" >> "$GITHUB_OUTPUT"
+          echo "→ Selected: $RUNNER"
