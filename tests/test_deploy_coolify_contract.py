@@ -9,6 +9,17 @@ TEXT = WORKFLOW.read_text(encoding="utf-8")
 
 
 class DeployCoolifyContractTest(unittest.TestCase):
+    def test_resource_uuid_input_is_optional(self) -> None:
+        self.assertIn("resource-uuid:", TEXT)
+        self.assertIn("required: false", TEXT)
+
+    def test_resource_uuid_can_fall_back_to_doppler_secret(self) -> None:
+        self.assertIn("COOLIFY_RESOURCE_UUID", TEXT)
+        self.assertIn("resolved-resource-uuid", TEXT)
+
+    def test_workflow_fails_clearly_when_resource_uuid_is_missing(self) -> None:
+        self.assertIn("Coolify resource UUID is required", TEXT)
+
     def test_job_timeout_is_capped_at_three_minutes(self) -> None:
         self.assertIn("timeout-minutes: 3", TEXT)
 

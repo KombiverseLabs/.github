@@ -11,8 +11,8 @@ on:
   workflow_call:
     inputs:
       resource-uuid:
-        description: 'Coolify resource UUID (application or service)'
-        required: true
+        description: 'Coolify resource UUID (application or service). Optional when COOLIFY_RESOURCE_UUID is available via Doppler.'
+        required: false
         type: string
       resource-type:
         description: 'Coolify resource type: application or service'
@@ -70,17 +70,46 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/doppler-cli.list
           sudo apt-get update -qq && sudo apt-get install -y doppler
 
+      - name: Resolve Coolify resource UUID
+        id: resolved-resource-uuid
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          INPUT_RESOURCE_UUID: ${{ inputs.resource-uuid }}
+        run: |
+          doppler secrets download --no-file --format json > /tmp/doppler_secrets.json
+
+          python3 << 'PYEOF'
+          import json
+          import os
+          import sys
+
+          input_uuid = os.environ.get('INPUT_RESOURCE_UUID', '').strip()
+          with open('/tmp/doppler_secrets.json', 'r', encoding='utf-8') as handle:
+              secret_map = json.load(handle)
+
+          resolved_uuid = input_uuid or str(secret_map.get('COOLIFY_RESOURCE_UUID', '')).strip()
+          if not resolved_uuid:
+              print('Coolify resource UUID is required. Provide workflow input resource-uuid or set COOLIFY_RESOURCE_UUID in Doppler.', file=sys.stderr)
+              raise SystemExit(1)
+
+          print(f'::add-mask::{resolved_uuid}')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
+              print(f'resource_uuid={resolved_uuid}', file=handle)
+          PYEOF
+
       - name: Sync env vars from Doppler to Coolify
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
-          RESOURCE_UUID: ${{ inputs.resource-uuid }}
+          RESOURCE_UUID: ${{ steps.resolved-resource-uuid.outputs.resource_uuid }}
           RESOURCE_TYPE: ${{ inputs.resource-type }}
           SYNC_MULTILINE_SECRETS: ${{ inputs.sync-multiline-secrets }}
         run: |
           # Download secrets from Doppler and upsert each into Coolify one by one.
           # Coolify Cloud SaaS doesn't support /envs/bulk; use POST (create) / DELETE+POST (update).
-          doppler secrets download --no-file --format json > /tmp/doppler_secrets.json
+          if [ ! -f /tmp/doppler_secrets.json ]; then
+            doppler secrets download --no-file --format json > /tmp/doppler_secrets.json
+          fi
 
           python3 << 'PYEOF'
           import json, urllib.request, urllib.error, os
@@ -186,7 +215,7 @@ jobs:
         if: inputs.resource-type == 'application' && inputs.image-tag != 'latest'
         env:
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
-          RESOURCE_UUID: ${{ inputs.resource-uuid }}
+          RESOURCE_UUID: ${{ steps.resolved-resource-uuid.outputs.resource_uuid }}
           IMAGE_TAG: ${{ inputs.image-tag }}
         run: |
           curl -s -X PATCH "https://app.coolify.io/api/v1/applications/${RESOURCE_UUID}" \
@@ -198,7 +227,7 @@ jobs:
         id: deploy
         env:
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
-          RESOURCE_UUID: ${{ inputs.resource-uuid }}
+          RESOURCE_UUID: ${{ steps.resolved-resource-uuid.outputs.resource_uuid }}
           FORCE: ${{ inputs.force }}
         run: |
           FORCE_FLAG=$([ "$FORCE" = "true" ] && echo "true" || echo "false")
@@ -217,7 +246,7 @@ jobs:
       - name: Wait for service to become healthy
         env:
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
-          RESOURCE_UUID: ${{ inputs.resource-uuid }}
+          RESOURCE_UUID: ${{ steps.resolved-resource-uuid.outputs.resource_uuid }}
           RESOURCE_TYPE: ${{ inputs.resource-type }}
           DEPLOY_UUID: ${{ steps.deploy.outputs.deployment_uuid }}
         run: |
@@ -277,7 +306,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-----|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Resource** | \`${{ inputs.resource-uuid }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Resource** | \`${{ steps.resolved-resource-uuid.outputs.resource_uuid }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Type** | ${{ inputs.resource-type }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Image Tag** | \`${{ inputs.image-tag }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Status** | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
