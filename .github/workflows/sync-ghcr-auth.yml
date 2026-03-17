@@ -12,7 +12,7 @@ on:
         description: 'Doppler server/service token used to resolve GHCR credentials'
         required: true
       GHCR_TOKEN_FALLBACK:
-        description: 'Optional bootstrap token from GitHub Secrets. When used, it is written back to Doppler.'
+        description: 'Optional bootstrap token from GitHub Secrets. When omitted, the workflow falls back to github.token.'
         required: false
 
 jobs:
@@ -48,7 +48,7 @@ jobs:
         id: ghcr
         env:
           DEPLOY_DOPPLER_TOKEN: ${{ secrets.DEPLOY_DOPPLER_TOKEN }}
-          GHCR_TOKEN_FALLBACK: ${{ secrets.GHCR_TOKEN_FALLBACK }}
+          GHCR_TOKEN_FALLBACK: ${{ secrets.GHCR_TOKEN_FALLBACK || github.token }}
         run: |
           DOPPLER_TOKEN="$DEPLOY_DOPPLER_TOKEN" doppler secrets download --no-file --format json > /tmp/deploy_doppler_secrets.json
 
@@ -94,6 +94,7 @@ jobs:
 
       - name: Bootstrap GHCR credentials into Doppler
         if: steps.ghcr.outputs.used_fallback == 'true'
+        continue-on-error: true
         env:
           DEPLOY_DOPPLER_TOKEN: ${{ secrets.DEPLOY_DOPPLER_TOKEN }}
           GHCR_USERNAME: ${{ steps.ghcr.outputs.username }}
