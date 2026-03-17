@@ -50,6 +50,9 @@ class DeployCoolifyContractTest(unittest.TestCase):
         self.assertIn("request('GET', f'services/{uuid}')", TEXT)
         self.assertIn("'docker_compose_raw': updated", TEXT)
         self.assertIn("no static image lines found in service docker compose", TEXT)
+        self.assertIn("image-repository:", TEXT)
+        self.assertIn("ghcr.io/{owner}/{repo.lower()}", TEXT)
+        self.assertIn("if image_repository and image_ref.lower() != image_repository:", TEXT)
 
 
 if __name__ == "__main__":
