@@ -91,7 +91,17 @@ jobs:
           skip = {'DOPPLER_CONFIG', 'DOPPLER_ENVIRONMENT', 'DOPPLER_PROJECT', 'COOLIFY_RESOURCE_UUID'}
 
           with open('/tmp/doppler_secrets.json') as f:
-              desired = {k: str(v) for k, v in json.load(f).items() if k not in skip}
+              desired = {}
+              for key, raw_value in json.load(f).items():
+                  if key in skip:
+                      continue
+                  value = str(raw_value)
+                  is_multiline = '\n' in value or '\r' in value
+                  desired[key] = {
+                      'value': value,
+                      'is_multiline': is_multiline,
+                      'is_literal': is_multiline,
+                  }
 
           def api(method, path, body=None):
               data = json.dumps(body).encode() if body else None
@@ -106,22 +116,42 @@ jobs:
           if err:
               print(f'ERROR fetching envs: {err}')
               raise SystemExit(1)
-          current = {e['key']: {'uuid': e['uuid'], 'value': e.get('value', '')} for e in current_list}
+          current = {
+              e['key']: {
+                  'uuid': e['uuid'],
+                  'value': e.get('value', ''),
+                  'is_multiline': bool(e.get('is_multiline', False)),
+                  'is_literal': bool(e.get('is_literal', False)),
+              }
+              for e in current_list
+          }
 
-          created = updated = skipped = 0
-          for key, value in desired.items():
+          created = updated = skipped = multiline = 0
+          for key, spec in desired.items():
+              payload = {
+                  'key': key,
+                  'value': spec['value'],
+                  'is_multiline': spec['is_multiline'],
+                  'is_literal': spec['is_literal'],
+              }
+              if spec['is_multiline']:
+                  multiline += 1
               if key in current:
-                  if current[key]['value'] == value:
+                  if (
+                      current[key]['value'] == spec['value']
+                      and current[key]['is_multiline'] == spec['is_multiline']
+                      and current[key]['is_literal'] == spec['is_literal']
+                  ):
                       skipped += 1
                       continue
                   api('DELETE', f'{rtype}s/{uuid}/envs/{current[key]["uuid"]}')
-                  r, err = api('POST', f'{rtype}s/{uuid}/envs', {'key': key, 'value': value})
+                  r, err = api('POST', f'{rtype}s/{uuid}/envs', payload)
                   if err:
                       print(f'  FAIL {key}: {err}')
                   else:
                       updated += 1
               else:
-                  r, err = api('POST', f'{rtype}s/{uuid}/envs', {'key': key, 'value': value})
+                  r, err = api('POST', f'{rtype}s/{uuid}/envs', payload)
                   if err and err[0] == 409:
                       skipped += 1  # already exists with same value
                   elif err:
@@ -129,7 +159,7 @@ jobs:
                   else:
                       created += 1
 
-          print(f'✅ Env sync complete: {created} created, {updated} updated, {skipped} unchanged')
+          print(f'✅ Env sync complete: {created} created, {updated} updated, {skipped} unchanged, {multiline} multiline')
           PYEOF
 
       - name: Update image tag
