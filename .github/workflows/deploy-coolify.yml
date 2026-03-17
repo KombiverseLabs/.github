@@ -71,14 +71,32 @@ jobs:
     steps:
       - name: Install Doppler CLI
         run: |
+          if command -v doppler >/dev/null 2>&1; then
+            doppler --version
+            exit 0
+          fi
+
           sudo mkdir -p /usr/share/keyrings
-          curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
-            'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' \
-            | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] \
-            https://packages.doppler.com/public/cli/deb/debian any-version main" \
-            | sudo tee /etc/apt/sources.list.d/doppler-cli.list
-          sudo apt-get update -qq && sudo apt-get install -y doppler
+          if [ ! -f /usr/share/keyrings/doppler-archive-keyring.gpg ]; then
+            curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
+              'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' \
+              | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
+          fi
+          if [ ! -f /etc/apt/sources.list.d/doppler-cli.list ]; then
+            echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] \
+              https://packages.doppler.com/public/cli/deb/debian any-version main" \
+              | sudo tee /etc/apt/sources.list.d/doppler-cli.list
+          fi
+
+          for attempt in 1 2 3 4 5; do
+            if sudo apt-get update -qq && sudo apt-get install -y doppler; then
+              doppler --version
+              exit 0
+            fi
+            echo "apt-get attempt ${attempt} failed; retrying in 10s"
+            sleep 10
+          done
+          exit 1
 
       - name: Resolve Coolify resource UUID
         id: resolved-resource-uuid
