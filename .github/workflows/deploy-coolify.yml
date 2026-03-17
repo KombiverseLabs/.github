@@ -30,7 +30,7 @@ on:
         type: string
         default: 'latest'
       image-repository:
-        description: 'Docker image repository to retag for service resources (defaults to ghcr.io/<owner>/<repo>)'
+        description: 'Docker image repository to deploy (defaults to ghcr.io/<owner>/<repo>)'
         required: false
         type: string
         default: ''
@@ -310,7 +310,10 @@ jobs:
                   return json.loads(response.read() or b'{}')
 
           if resource_type == 'application':
-              result = request('PATCH', f'applications/{uuid}', {'docker_registry_image_tag': image_tag})
+              payload = {'docker_registry_image_tag': image_tag}
+              if image_repository:
+                  payload['docker_registry_image_name'] = image_repository
+              result = request('PATCH', f'applications/{uuid}', payload)
               print(json.dumps(result, indent=2))
               raise SystemExit(0)
 
