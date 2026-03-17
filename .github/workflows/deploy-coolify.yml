@@ -39,6 +39,11 @@ on:
         required: false
         type: string
         default: 'srv1161760-labs'
+      sync-multiline-secrets:
+        description: 'Whether to sync multiline Doppler secrets into Coolify envs'
+        required: false
+        type: boolean
+        default: false
     secrets:
       DOPPLER_TOKEN:
         description: 'Doppler project service token (read-only, project-scoped)'
@@ -71,6 +76,7 @@ jobs:
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
           RESOURCE_UUID: ${{ inputs.resource-uuid }}
           RESOURCE_TYPE: ${{ inputs.resource-type }}
+          SYNC_MULTILINE_SECRETS: ${{ inputs.sync-multiline-secrets }}
         run: |
           # Download secrets from Doppler and upsert each into Coolify one by one.
           # Coolify Cloud SaaS doesn't support /envs/bulk; use POST (create) / DELETE+POST (update).
@@ -82,6 +88,7 @@ jobs:
           token = os.environ['COOLIFY_TOKEN']
           uuid = os.environ['RESOURCE_UUID']
           rtype = os.environ.get('RESOURCE_TYPE', 'application')
+          sync_multiline = os.environ.get('SYNC_MULTILINE_SECRETS', 'false').lower() == 'true'
           base = 'https://app.coolify.io/api/v1'
           headers = {
               'Authorization': f'Bearer {token}',
@@ -92,11 +99,15 @@ jobs:
 
           with open('/tmp/doppler_secrets.json') as f:
               desired = {}
+              skipped_multiline = set()
               for key, raw_value in json.load(f).items():
                   if key in skip:
                       continue
                   value = str(raw_value)
                   is_multiline = '\n' in value or '\r' in value
+                  if is_multiline and not sync_multiline:
+                      skipped_multiline.add(key)
+                      continue
                   desired[key] = {
                       'value': value,
                       'is_multiline': is_multiline,
@@ -125,6 +136,13 @@ jobs:
               }
               for e in current_list
           }
+
+          removed_multiline = 0
+          for key in sorted(skipped_multiline):
+              if key not in current:
+                  continue
+              api('DELETE', f'{rtype}s/{uuid}/envs/{current[key]["uuid"]}')
+              removed_multiline += 1
 
           created = updated = skipped = multiline = 0
           for key, spec in desired.items():
@@ -159,7 +177,9 @@ jobs:
                   else:
                       created += 1
 
-          print(f'✅ Env sync complete: {created} created, {updated} updated, {skipped} unchanged, {multiline} multiline')
+          if skipped_multiline:
+              print(f'⚠️ Skipped multiline secrets: {", ".join(sorted(skipped_multiline))}')
+          print(f'✅ Env sync complete: {created} created, {updated} updated, {skipped} unchanged, {multiline} multiline synced, {removed_multiline} multiline removed')
           PYEOF
 
       - name: Update image tag
