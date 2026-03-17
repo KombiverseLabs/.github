@@ -292,7 +292,11 @@ jobs:
 
           updated = image_line.sub(replace, compose)
           if replace_state['count'] == 0:
-              raise SystemExit('no static image lines found in service docker compose; refusing silent no-op')
+              print(
+                  'no static image lines found in service docker compose; '
+                  'skipping image tag mutation and relying on the configured service image source'
+              )
+              raise SystemExit(0)
           if updated == compose:
               print('service docker compose already uses requested image tag')
               raise SystemExit(0)
