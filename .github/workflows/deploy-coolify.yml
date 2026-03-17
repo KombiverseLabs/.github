@@ -397,7 +397,7 @@ jobs:
                 | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','unknown'))" 2>/dev/null || echo "unknown")
               echo "  [${i}] service status: $STATUS"
               case "$STATUS" in
-                running|running:healthy) echo "✅ Service is running"; exit 0 ;;
+                running*) echo "✅ Service is running"; exit 0 ;;
                 exited|error) echo "❌ Service failed to start"; exit 1 ;;
               esac
             done

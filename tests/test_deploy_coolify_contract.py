@@ -50,6 +50,7 @@ class DeployCoolifyContractTest(unittest.TestCase):
         self.assertIn("sleep 3", TEXT)
         self.assertIn("for i in $(seq 1 18); do", TEXT)
         self.assertIn("sleep 5", TEXT)
+        self.assertIn("running*) echo \"✅ Service is running\"; exit 0 ;;", TEXT)
 
     def test_health_check_uses_short_retry_budget(self) -> None:
         self.assertRegex(TEXT, r"for i in 1 2 3; do")
