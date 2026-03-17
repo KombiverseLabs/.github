@@ -1,0 +1,98 @@
+name: Sync GHCR Auth
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: 'Runner label for the target server host'
+        required: true
+        type: string
+    secrets:
+      DEPLOY_DOPPLER_TOKEN:
+        description: 'Doppler server/service token used to resolve GHCR credentials'
+        required: true
+
+jobs:
+  sync:
+    name: Sync GHCR Auth
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 3
+
+    steps:
+      - name: Install Doppler CLI
+        run: |
+          if command -v doppler >/dev/null 2>&1; then
+            doppler --version
+            exit 0
+          fi
+
+          sudo mkdir -p /usr/share/keyrings
+          if [ ! -f /usr/share/keyrings/doppler-archive-keyring.gpg ]; then
+            curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
+              'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' \
+              | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
+          fi
+          if [ ! -f /etc/apt/sources.list.d/doppler-cli.list ]; then
+            echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] \
+              https://packages.doppler.com/public/cli/deb/debian any-version main" \
+              | sudo tee /etc/apt/sources.list.d/doppler-cli.list
+          fi
+
+          sudo apt-get update -qq
+          sudo apt-get install -y doppler
+
+      - name: Resolve GHCR credentials
+        id: ghcr
+        env:
+          DEPLOY_DOPPLER_TOKEN: ${{ secrets.DEPLOY_DOPPLER_TOKEN }}
+        run: |
+          DOPPLER_TOKEN="$DEPLOY_DOPPLER_TOKEN" doppler secrets download --no-file --format json > /tmp/deploy_doppler_secrets.json
+
+          python3 << 'PYEOF'
+          import json
+          import os
+          import sys
+
+          with open('/tmp/deploy_doppler_secrets.json', 'r', encoding='utf-8') as handle:
+              secret_map = json.load(handle)
+
+          username = (
+              str(secret_map.get('GHCR_USERNAME', '')).strip()
+              or str(secret_map.get('GITHUB_REGISTRY_USERNAME', '')).strip()
+              or 'KombiverseLabs'
+          )
+          token = ''
+          for key in ('GHCR_TOKEN', 'GHCR_PAT', 'GH_PAT'):
+              value = str(secret_map.get(key, '')).strip()
+              if value:
+                  token = value
+                  break
+
+          if not token:
+              print(
+                  'GHCR credentials are required. Set GHCR_TOKEN, GHCR_PAT, or GH_PAT in the deploy Doppler project.',
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+          print(f'::add-mask::{token}')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
+              print(f'username={username}', file=handle)
+              print(f'token={token}', file=handle)
+          PYEOF
+
+      - name: Login to GHCR on target host
+        env:
+          GHCR_USERNAME: ${{ steps.ghcr.outputs.username }}
+          GHCR_TOKEN: ${{ steps.ghcr.outputs.token }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+
+      - name: Summary
+        run: |
+          echo "### GHCR Auth Synced" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Key | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Runner | \`${{ inputs.runner }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| User | \`$(whoami)\` |" >> "$GITHUB_STEP_SUMMARY"
