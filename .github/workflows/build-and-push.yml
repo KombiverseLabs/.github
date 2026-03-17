@@ -6,7 +6,7 @@ on:
   workflow_call:
     inputs:
       image-name:
-        description: 'Image name (e.g., kombify-api). Defaults to repo name.'
+        description: 'Image name (e.g., kombify-gateway). Defaults to repo name.'
         required: false
         type: string
         default: ''
