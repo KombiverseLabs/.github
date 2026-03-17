@@ -8,7 +8,8 @@ This repo holds reusable GitHub Actions workflows for all KombiverseLabs repos.
 |----------|---------|
 | `pick-runner.yml` | Runtime runner selection — bootstraps on `srv1161760-labs`, falls back to Blacksmith then ubuntu-latest |
 | `build-and-push.yml` | Build Docker image with Dagger, push to GHCR |
-| `deploy-vps-ssh.yml` | SSH deploy to a VPS: pull new image, docker compose up, health check |
+| `deploy-coolify.yml` | Coolify deploy: sync Doppler env vars, update image tag, trigger redeploy, verify health |
+| `deploy-vps-ssh.yml` | Legacy SSH deploy to a VPS; keep only for repos that have not yet moved to Coolify |
 | `health-monitor.yml` | Periodic health check of deployed services |
 
 ## Infrastructure Overview
@@ -35,5 +36,8 @@ srv1161760-labs  →  blacksmith-4vcpu-ubuntu-2204  →  ubuntu-latest
 
 ## Deploy Target for kombify.io Services
 
-When a workflow deploys to `*.kombify.io`, the `VPS_HOST` secret must be `217.154.174.107` (kombify-ionos).
-The `srv1161760` server is NOT a deployment target for kombify.io — it is a build server for kombify.space.
+`kombify-ionos` and `srv1161760` are managed as Coolify remote servers.
+GitHub Actions should trigger Coolify deployments instead of logging into those hosts directly.
+
+The `srv1161760` server remains the preferred CI runner.
+The `kombify-ionos` host remains a runtime target, but through Coolify orchestration rather than ad hoc SSH deploy steps.
