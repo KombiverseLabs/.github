@@ -69,6 +69,16 @@ jobs:
     timeout-minutes: 3
 
     steps:
+      - name: Free runner disk space
+        run: |
+          df -h
+          docker system df || true
+          docker builder prune -af || true
+          docker image prune -af || true
+          docker container prune -f || true
+          docker volume prune -f || true
+          df -h
+
       - name: Install Doppler CLI
         run: |
           if command -v doppler >/dev/null 2>&1; then
