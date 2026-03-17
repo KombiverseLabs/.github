@@ -11,7 +11,7 @@ on:
   workflow_call:
     inputs:
       resource-uuid:
-        description: 'Coolify resource UUID (application or service). Optional when COOLIFY_RESOURCE_UUID is available via Doppler.'
+        description: 'Coolify resource UUID (application or service). Optional when COOLIFY_RESOURCE_UUID is available via workflow secret or Doppler.'
         required: false
         type: string
       resource-type:
@@ -38,7 +38,7 @@ on:
         description: 'Runner label to execute the deployment on'
         required: false
         type: string
-        default: 'srv1161760-labs'
+        default: 'ubuntu-latest'
       sync-multiline-secrets:
         description: 'Whether to sync multiline Doppler secrets into Coolify envs'
         required: false
@@ -51,6 +51,9 @@ on:
       COOLIFY_API_TOKEN:
         description: 'Coolify API token (org-level secret: COOLIFY_API_TOKEN)'
         required: true
+      COOLIFY_RESOURCE_UUID:
+        description: 'Optional Coolify resource UUID secret. Falls back to Doppler when omitted.'
+        required: false
 
 jobs:
   deploy:
@@ -75,6 +78,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           INPUT_RESOURCE_UUID: ${{ inputs.resource-uuid }}
+          SECRET_RESOURCE_UUID: ${{ secrets.COOLIFY_RESOURCE_UUID }}
         run: |
           doppler secrets download --no-file --format json > /tmp/doppler_secrets.json
 
@@ -84,12 +88,13 @@ jobs:
           import sys
 
           input_uuid = os.environ.get('INPUT_RESOURCE_UUID', '').strip()
+          secret_uuid = os.environ.get('SECRET_RESOURCE_UUID', '').strip()
           with open('/tmp/doppler_secrets.json', 'r', encoding='utf-8') as handle:
               secret_map = json.load(handle)
 
-          resolved_uuid = input_uuid or str(secret_map.get('COOLIFY_RESOURCE_UUID', '')).strip()
+          resolved_uuid = input_uuid or secret_uuid or str(secret_map.get('COOLIFY_RESOURCE_UUID', '')).strip()
           if not resolved_uuid:
-              print('Coolify resource UUID is required. Provide workflow input resource-uuid or set COOLIFY_RESOURCE_UUID in Doppler.', file=sys.stderr)
+              print('Coolify resource UUID is required. Provide workflow input resource-uuid, workflow secret COOLIFY_RESOURCE_UUID, or set COOLIFY_RESOURCE_UUID in Doppler.', file=sys.stderr)
               raise SystemExit(1)
 
           print(f'::add-mask::{resolved_uuid}')

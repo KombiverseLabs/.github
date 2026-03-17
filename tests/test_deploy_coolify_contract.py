@@ -13,9 +13,19 @@ class DeployCoolifyContractTest(unittest.TestCase):
         self.assertIn("resource-uuid:", TEXT)
         self.assertIn("required: false", TEXT)
 
+    def test_workflow_accepts_secret_based_resource_uuid(self) -> None:
+        self.assertIn("COOLIFY_RESOURCE_UUID:", TEXT)
+        self.assertIn("required: false", TEXT)
+
     def test_resource_uuid_can_fall_back_to_doppler_secret(self) -> None:
         self.assertIn("COOLIFY_RESOURCE_UUID", TEXT)
         self.assertIn("resolved-resource-uuid", TEXT)
+
+    def test_resource_uuid_resolution_prefers_input_then_secret_then_doppler(self) -> None:
+        pattern = re.compile(
+            r"resolved_uuid = input_uuid or secret_uuid or str\(secret_map.get\('COOLIFY_RESOURCE_UUID', ''\)\).strip\(\)"
+        )
+        self.assertRegex(TEXT, pattern)
 
     def test_workflow_fails_clearly_when_resource_uuid_is_missing(self) -> None:
         self.assertIn("Coolify resource UUID is required", TEXT)
