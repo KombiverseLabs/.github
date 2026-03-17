@@ -11,6 +11,9 @@ on:
       DEPLOY_DOPPLER_TOKEN:
         description: 'Doppler server/service token used to resolve GHCR credentials'
         required: true
+      GHCR_TOKEN_FALLBACK:
+        description: 'Optional bootstrap token from GitHub Secrets. When used, it is written back to Doppler.'
+        required: false
 
 jobs:
   sync:
@@ -45,6 +48,7 @@ jobs:
         id: ghcr
         env:
           DEPLOY_DOPPLER_TOKEN: ${{ secrets.DEPLOY_DOPPLER_TOKEN }}
+          GHCR_TOKEN_FALLBACK: ${{ secrets.GHCR_TOKEN_FALLBACK }}
         run: |
           DOPPLER_TOKEN="$DEPLOY_DOPPLER_TOKEN" doppler secrets download --no-file --format json > /tmp/deploy_doppler_secrets.json
 
@@ -68,6 +72,12 @@ jobs:
                   token = value
                   break
 
+          used_fallback = False
+          fallback_token = os.environ.get('GHCR_TOKEN_FALLBACK', '').strip()
+          if not token and fallback_token:
+              token = fallback_token
+              used_fallback = True
+
           if not token:
               print(
                   'GHCR credentials are required. Set GHCR_TOKEN, GHCR_PAT, or GH_PAT in the deploy Doppler project.',
@@ -79,7 +89,20 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
               print(f'username={username}', file=handle)
               print(f'token={token}', file=handle)
+              print(f'used_fallback={"true" if used_fallback else "false"}', file=handle)
           PYEOF
+
+      - name: Bootstrap GHCR credentials into Doppler
+        if: steps.ghcr.outputs.used_fallback == 'true'
+        env:
+          DEPLOY_DOPPLER_TOKEN: ${{ secrets.DEPLOY_DOPPLER_TOKEN }}
+          GHCR_USERNAME: ${{ steps.ghcr.outputs.username }}
+          GHCR_TOKEN: ${{ steps.ghcr.outputs.token }}
+        run: |
+          DOPPLER_TOKEN="$DEPLOY_DOPPLER_TOKEN" doppler secrets set \
+            GHCR_USERNAME="$GHCR_USERNAME" \
+            GHCR_PAT="$GHCR_TOKEN" \
+            --silent
 
       - name: Login to GHCR on target host
         env:
@@ -96,3 +119,4 @@ jobs:
           echo "|-----|-------|" >> "$GITHUB_STEP_SUMMARY"
           echo "| Runner | \`${{ inputs.runner }}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| User | \`$(whoami)\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Bootstrapped From GitHub | \`${{ steps.ghcr.outputs.used_fallback }}\` |" >> "$GITHUB_STEP_SUMMARY"
