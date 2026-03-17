@@ -212,16 +212,75 @@ jobs:
           PYEOF
 
       - name: Update image tag
-        if: inputs.resource-type == 'application' && inputs.image-tag != 'latest'
+        if: inputs.image-tag != 'latest'
         env:
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
           RESOURCE_UUID: ${{ steps.resolved-resource-uuid.outputs.resource_uuid }}
           IMAGE_TAG: ${{ inputs.image-tag }}
+          RESOURCE_TYPE: ${{ inputs.resource-type }}
         run: |
-          curl -s -X PATCH "https://app.coolify.io/api/v1/applications/${RESOURCE_UUID}" \
-            -H "Authorization: Bearer ${COOLIFY_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "{\"docker_registry_image_tag\": \"${IMAGE_TAG}\"}" | python3 -m json.tool
+          python3 << 'PYEOF'
+          import json
+          import os
+          import re
+          import urllib.request
+
+          token = os.environ['COOLIFY_TOKEN']
+          uuid = os.environ['RESOURCE_UUID']
+          image_tag = os.environ['IMAGE_TAG']
+          resource_type = os.environ.get('RESOURCE_TYPE', 'service')
+          base = 'https://app.coolify.io/api/v1'
+          headers = {
+              'Authorization': f'Bearer {token}',
+              'Content-Type': 'application/json',
+              'User-Agent': 'Coolify-Deploy/1.0',
+          }
+
+          def request(method, path, payload=None):
+              data = json.dumps(payload).encode() if payload is not None else None
+              req = urllib.request.Request(f'{base}/{path}', data=data, method=method, headers=headers)
+              with urllib.request.urlopen(req) as response:
+                  return json.loads(response.read() or b'{}')
+
+          if resource_type == 'application':
+              result = request('PATCH', f'applications/{uuid}', {'docker_registry_image_tag': image_tag})
+              print(json.dumps(result, indent=2))
+              raise SystemExit(0)
+
+          if resource_type != 'service':
+              raise SystemExit(f'unsupported resource type for image tag update: {resource_type}')
+
+          current = request('GET', f'services/{uuid}')
+          compose = current.get('docker_compose_raw') or current.get('docker_compose')
+          if not compose:
+              raise SystemExit('service is missing docker_compose_raw/docker_compose; cannot update image tag')
+
+          image_line = re.compile(
+              r'^(?P<prefix>\s*image:\s*)(?P<image>[^@\s#]+?)(?::(?P<tag>[^@\s#]+))?(?P<suffix>\s*(?:#.*)?)$',
+              re.MULTILINE,
+          )
+
+          replace_state = {'count': 0}
+
+          def replace(match):
+              image_ref = match.group('image')
+              tag = match.group('tag')
+              suffix = match.group('suffix') or ''
+              if image_ref.startswith('${') or (tag and tag.startswith('${')):
+                  return match.group(0)
+              replace_state['count'] += 1
+              return f"{match.group('prefix')}{image_ref}:{image_tag}{suffix}"
+
+          updated = image_line.sub(replace, compose)
+          if replace_state['count'] == 0:
+              raise SystemExit('no static image lines found in service docker compose; refusing silent no-op')
+          if updated == compose:
+              print('service docker compose already uses requested image tag')
+              raise SystemExit(0)
+
+          result = request('PATCH', f'services/{uuid}', {'docker_compose_raw': updated})
+          print(json.dumps(result, indent=2))
+          PYEOF
 
       - name: Trigger Coolify deployment
         id: deploy

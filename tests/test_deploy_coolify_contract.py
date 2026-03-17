@@ -34,6 +34,13 @@ class DeployCoolifyContractTest(unittest.TestCase):
         self.assertRegex(TEXT, r"for i in 1 2 3; do")
         self.assertIn("--max-time 10", TEXT)
 
+    def test_service_resources_update_their_compose_image_tags(self) -> None:
+        self.assertIn("if: inputs.image-tag != 'latest'", TEXT)
+        self.assertIn("if resource_type != 'service':", TEXT)
+        self.assertIn("request('GET', f'services/{uuid}')", TEXT)
+        self.assertIn("'docker_compose_raw': updated", TEXT)
+        self.assertIn("no static image lines found in service docker compose", TEXT)
+
 
 if __name__ == "__main__":
     unittest.main()
