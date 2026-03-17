@@ -68,7 +68,7 @@ jobs:
     name: Pick runner
     uses: KombiverseLabs/.github/.github/workflows/pick-runner.yml@main
     with:
-      preferred: ${{ inputs.runner || 'srv1161760-labs' }}
+      preferred: ${{ inputs.runner || 'blacksmith-4vcpu-ubuntu-2204' }}
     secrets: inherit
 
   build:

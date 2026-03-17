@@ -41,8 +41,8 @@ class DeployCoolifyContractTest(unittest.TestCase):
     def test_job_timeout_is_capped_at_three_minutes(self) -> None:
         self.assertIn("timeout-minutes: 3", TEXT)
 
-    def test_default_runner_prefers_budget_free_self_hosted_runner(self) -> None:
-        self.assertIn("default: 'srv1161760-labs'", TEXT)
+    def test_default_runner_uses_blacksmith_capacity(self) -> None:
+        self.assertIn("default: 'blacksmith-4vcpu-ubuntu-2204'", TEXT)
 
     def test_deployment_wait_loop_stays_under_three_minutes(self) -> None:
         self.assertNotIn('echo "Waiting 20s for Coolify to pull image and restart..."', TEXT)

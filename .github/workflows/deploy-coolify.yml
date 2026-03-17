@@ -48,7 +48,7 @@ on:
         description: 'Runner label to execute the deployment on'
         required: false
         type: string
-        default: 'srv1161760-labs'
+        default: 'blacksmith-4vcpu-ubuntu-2204'
       sync-multiline-secrets:
         description: 'Whether to sync multiline Doppler secrets into Coolify envs'
         required: false
