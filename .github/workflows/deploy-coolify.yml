@@ -77,8 +77,21 @@ jobs:
           df -h
 
       - name: Install Doppler CLI
-        if: secrets.DEPLOY_DOPPLER_TOKEN != '' && (inputs.resource-uuid == '' || secrets.COOLIFY_API_TOKEN == '')
+        env:
+          INPUT_COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          DEPLOY_DOPPLER_TOKEN: ${{ secrets.DEPLOY_DOPPLER_TOKEN }}
+          INPUT_RESOURCE_UUID: ${{ inputs.resource-uuid }}
         run: |
+          if [ -n "$INPUT_RESOURCE_UUID" ] && [ -n "$INPUT_COOLIFY_API_TOKEN" ]; then
+            echo "Skipping Doppler install; resource UUID and Coolify token were provided directly."
+            exit 0
+          fi
+
+          if [ -z "$DEPLOY_DOPPLER_TOKEN" ]; then
+            echo "Skipping Doppler install; no DEPLOY_DOPPLER_TOKEN was provided."
+            exit 0
+          fi
+
           if command -v doppler >/dev/null 2>&1; then
             doppler --version
             exit 0
