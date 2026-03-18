@@ -30,6 +30,11 @@ on:
         required: false
         type: string
         default: ''
+      doppler-runtime-env-secret-id:
+        description: 'Optional BuildKit secret id populated with a shell export file containing all Doppler secrets for baking runtime env into the image.'
+        required: false
+        type: string
+        default: ''
       platforms:
         description: 'Target platforms'
         required: false
@@ -87,7 +92,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Doppler CLI
-        if: inputs.doppler-build-secrets != ''
+        if: inputs.doppler-build-secrets != '' || inputs.doppler-runtime-env-secret-id != ''
         run: |
           if command -v doppler >/dev/null 2>&1; then
             exit 0
@@ -157,6 +162,66 @@ jobs:
               print('EOF', file=handle)
           PYEOF
 
+      - name: Resolve Doppler runtime env
+        if: inputs.doppler-runtime-env-secret-id != ''
+        id: doppler-runtime-env
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          SECRET_ID: ${{ inputs.doppler-runtime-env-secret-id }}
+        run: |
+          if [ -z "$DOPPLER_TOKEN" ]; then
+            echo "DOPPLER_TOKEN is required when doppler-runtime-env-secret-id is set" >&2
+            exit 1
+          fi
+
+          doppler secrets download --no-file --format json > /tmp/doppler-runtime-env.json
+
+          python3 <<'PYEOF'
+          import json
+          import os
+          import re
+          import sys
+
+          skip = {
+              'DOPPLER_CONFIG',
+              'DOPPLER_ENVIRONMENT',
+              'DOPPLER_PROJECT',
+              'DOPPLER_TOKEN_ENVIRONMENT',
+              'DOPPLER_TOKEN_PROJECT',
+          }
+
+          def shell_quote(value: str) -> str:
+              return "'" + value.replace("'", "'\"'\"'") + "'"
+
+          with open('/tmp/doppler-runtime-env.json', 'r', encoding='utf-8') as handle:
+              secret_map = json.load(handle)
+
+          secret_id = os.environ['SECRET_ID']
+          if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', secret_id):
+              print(f'Invalid BuildKit secret id: {secret_id}', file=sys.stderr)
+              raise SystemExit(1)
+
+          path = '/tmp/doppler-runtime-env.sh'
+          with open(path, 'w', encoding='utf-8') as handle:
+              handle.write('#!/bin/sh\n')
+              for key in sorted(secret_map):
+                  if key in skip:
+                      continue
+                  if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key):
+                      print(f'Invalid env key for runtime export: {key}', file=sys.stderr)
+                      raise SystemExit(1)
+                  value = secret_map[key]
+                  if value is None:
+                      value = ''
+                  handle.write(f'export {key}={shell_quote(str(value))}\n')
+          os.chmod(path, 0o600)
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
+              print('docker_secret_file<<EOF', file=handle)
+              print(f'{secret_id}={path}', file=handle)
+              print('EOF', file=handle)
+          PYEOF
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -201,6 +266,8 @@ jobs:
           secrets: |
             GITHUB_TOKEN=${{ secrets.GH_PAT != '' && secrets.GH_PAT || github.token }}
             ${{ steps.doppler-build-secrets.outputs.docker_secrets }}
+          secret-files: |
+            ${{ steps.doppler-runtime-env.outputs.docker_secret_file }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

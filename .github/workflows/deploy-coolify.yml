@@ -1,10 +1,12 @@
 # Reusable workflow: Deploy to Coolify (SaaS)
-# Fetches env vars from Doppler, syncs to Coolify, then triggers redeploy.
-# Supports both application and service resource types.
+# Triggers a deployment against an already-configured Coolify resource.
+# GitHub builds the image with the required config baked in; this workflow
+# must not write app env vars into Coolify.
 #
-# Secret requirements (set at repo level — see docs/CI_CD.md):
-#   DOPPLER_TOKEN        — app-scoped Doppler service token for runtime env sync
-#   DEPLOY_DOPPLER_TOKEN — server-scoped Doppler service token for Coolify credentials
+# Secret requirements:
+# - Prefer passing COOLIFY_API_TOKEN directly from GitHub.
+# - DEPLOY_DOPPLER_TOKEN remains supported only to resolve Coolify credentials
+#   and/or resource UUIDs when a caller does not pass them explicitly.
 name: Deploy to Coolify
 
 on:
@@ -49,18 +51,13 @@ on:
         required: false
         type: string
         default: 'blacksmith-4vcpu-ubuntu-2204'
-      sync-multiline-secrets:
-        description: 'Whether to sync multiline Doppler secrets into Coolify envs'
-        required: false
-        type: boolean
-        default: false
     secrets:
-      DOPPLER_TOKEN:
-        description: 'Doppler project service token (read-only, project-scoped)'
-        required: true
+      COOLIFY_API_TOKEN:
+        description: 'Coolify API token (preferred source; GitHub secret)'
+        required: false
       DEPLOY_DOPPLER_TOKEN:
-        description: 'Doppler server/service token used to resolve Coolify credentials and resource UUIDs'
-        required: true
+        description: 'Optional Doppler token used only to resolve Coolify credentials and/or resource UUIDs'
+        required: false
 
 jobs:
   deploy:
@@ -80,6 +77,7 @@ jobs:
           df -h
 
       - name: Install Doppler CLI
+        if: secrets.DEPLOY_DOPPLER_TOKEN != '' && (inputs.resource-uuid == '' || secrets.COOLIFY_API_TOKEN == '')
         run: |
           if command -v doppler >/dev/null 2>&1; then
             doppler --version
@@ -111,10 +109,26 @@ jobs:
       - name: Resolve Coolify resource UUID
         id: resolved-resource-uuid
         env:
+          INPUT_COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
           DEPLOY_DOPPLER_TOKEN: ${{ secrets.DEPLOY_DOPPLER_TOKEN }}
           INPUT_RESOURCE_UUID: ${{ inputs.resource-uuid }}
           RESOURCE_SECRET_NAME: ${{ inputs.resource-secret-name }}
         run: |
+          if [ -n "$INPUT_RESOURCE_UUID" ] && [ -n "$INPUT_COOLIFY_API_TOKEN" ]; then
+            echo "::add-mask::$INPUT_RESOURCE_UUID"
+            echo "::add-mask::$INPUT_COOLIFY_API_TOKEN"
+            {
+              echo "resource_uuid=$INPUT_RESOURCE_UUID"
+              echo "coolify_api_token=$INPUT_COOLIFY_API_TOKEN"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -z "$DEPLOY_DOPPLER_TOKEN" ]; then
+            echo "DEPLOY_DOPPLER_TOKEN is required when resource-uuid or COOLIFY_API_TOKEN is not provided directly" >&2
+            exit 1
+          fi
+
           DOPPLER_TOKEN="$DEPLOY_DOPPLER_TOKEN" doppler secrets download --no-file --format json > /tmp/deploy_doppler_secrets.json
 
           python3 << 'PYEOF'
@@ -123,6 +137,7 @@ jobs:
           import sys
 
           input_uuid = os.environ.get('INPUT_RESOURCE_UUID', '').strip()
+          input_token = os.environ.get('INPUT_COOLIFY_API_TOKEN', '').strip()
           resource_secret_name = os.environ.get('RESOURCE_SECRET_NAME', 'COOLIFY_RESOURCE_UUID').strip() or 'COOLIFY_RESOURCE_UUID'
           with open('/tmp/deploy_doppler_secrets.json', 'r', encoding='utf-8') as handle:
               secret_map = json.load(handle)
@@ -136,12 +151,13 @@ jobs:
               )
               raise SystemExit(1)
 
-          coolify_api_token = str(
+          coolify_api_token = input_token or str(
               secret_map.get('COOLIFY_API_TOKEN', '') or secret_map.get('COOLIFY_API_KEY', '')
           ).strip()
           if not coolify_api_token:
               print(
-                  'Coolify API token is required. Set COOLIFY_API_TOKEN or COOLIFY_API_KEY in the deploy Doppler project.',
+                  'Coolify API token is required. Pass COOLIFY_API_TOKEN as a GitHub secret or set '
+                  'COOLIFY_API_TOKEN / COOLIFY_API_KEY in the deploy Doppler project.',
                   file=sys.stderr,
               )
               raise SystemExit(1)
@@ -151,124 +167,6 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
               print(f'resource_uuid={resolved_uuid}', file=handle)
               print(f'coolify_api_token={coolify_api_token}', file=handle)
-          PYEOF
-
-      - name: Sync env vars from Doppler to Coolify
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          COOLIFY_TOKEN: ${{ steps.resolved-resource-uuid.outputs.coolify_api_token }}
-          RESOURCE_UUID: ${{ steps.resolved-resource-uuid.outputs.resource_uuid }}
-          RESOURCE_TYPE: ${{ inputs.resource-type }}
-          SYNC_MULTILINE_SECRETS: ${{ inputs.sync-multiline-secrets }}
-        run: |
-          # Download secrets from Doppler and upsert each into Coolify one by one.
-          # Coolify Cloud SaaS doesn't support /envs/bulk; use POST (create) / DELETE+POST (update).
-          if [ ! -f /tmp/app_doppler_secrets.json ]; then
-            doppler secrets download --no-file --format json > /tmp/app_doppler_secrets.json
-          fi
-
-          python3 << 'PYEOF'
-          import json, urllib.request, urllib.error, os
-
-          token = os.environ['COOLIFY_TOKEN']
-          uuid = os.environ['RESOURCE_UUID']
-          rtype = os.environ.get('RESOURCE_TYPE', 'application')
-          sync_multiline = os.environ.get('SYNC_MULTILINE_SECRETS', 'false').lower() == 'true'
-          base = 'https://app.coolify.io/api/v1'
-          headers = {
-              'Authorization': f'Bearer {token}',
-              'Content-Type': 'application/json',
-              'User-Agent': 'Coolify-Deploy/1.0',
-          }
-          skip = {'DOPPLER_CONFIG', 'DOPPLER_ENVIRONMENT', 'DOPPLER_PROJECT'}
-
-          with open('/tmp/app_doppler_secrets.json') as f:
-              desired = {}
-              skipped_multiline = set()
-              for key, raw_value in json.load(f).items():
-                  if (
-                      key in skip
-                      or key in {'COOLIFY_API_TOKEN', 'COOLIFY_API_KEY', 'COOLIFY_RESOURCE_UUID'}
-                      or key.endswith('_RESOURCE_UUID')
-                  ):
-                      continue
-                  value = str(raw_value)
-                  is_multiline = '\n' in value or '\r' in value
-                  if is_multiline and not sync_multiline:
-                      skipped_multiline.add(key)
-                      continue
-                  desired[key] = {
-                      'value': value,
-                      'is_multiline': is_multiline,
-                      'is_literal': is_multiline,
-                  }
-
-          def api(method, path, body=None):
-              data = json.dumps(body).encode() if body else None
-              req = urllib.request.Request(f'{base}/{path}', data=data, method=method, headers=headers)
-              try:
-                  with urllib.request.urlopen(req) as r:
-                      return json.loads(r.read() or b'{}'), None
-              except urllib.error.HTTPError as e:
-                  return None, (e.code, e.read().decode()[:300])
-
-          current_list, err = api('GET', f'{rtype}s/{uuid}/envs')
-          if err:
-              print(f'ERROR fetching envs: {err}')
-              raise SystemExit(1)
-          current = {
-              e['key']: {
-                  'uuid': e['uuid'],
-                  'value': e.get('value', ''),
-                  'is_multiline': bool(e.get('is_multiline', False)),
-                  'is_literal': bool(e.get('is_literal', False)),
-              }
-              for e in current_list
-          }
-
-          removed_multiline = 0
-          for key in sorted(skipped_multiline):
-              if key not in current:
-                  continue
-              api('DELETE', f'{rtype}s/{uuid}/envs/{current[key]["uuid"]}')
-              removed_multiline += 1
-
-          created = updated = skipped = multiline = 0
-          for key, spec in desired.items():
-              payload = {
-                  'key': key,
-                  'value': spec['value'],
-                  'is_multiline': spec['is_multiline'],
-                  'is_literal': spec['is_literal'],
-              }
-              if spec['is_multiline']:
-                  multiline += 1
-              if key in current:
-                  if (
-                      current[key]['value'] == spec['value']
-                      and current[key]['is_multiline'] == spec['is_multiline']
-                      and current[key]['is_literal'] == spec['is_literal']
-                  ):
-                      skipped += 1
-                      continue
-                  api('DELETE', f'{rtype}s/{uuid}/envs/{current[key]["uuid"]}')
-                  r, err = api('POST', f'{rtype}s/{uuid}/envs', payload)
-                  if err:
-                      print(f'  FAIL {key}: {err}')
-                  else:
-                      updated += 1
-              else:
-                  r, err = api('POST', f'{rtype}s/{uuid}/envs', payload)
-                  if err and err[0] == 409:
-                      skipped += 1  # already exists with same value
-                  elif err:
-                      print(f'  FAIL {key}: {err}')
-                  else:
-                      created += 1
-
-          if skipped_multiline:
-              print(f'⚠️ Skipped multiline secrets: {", ".join(sorted(skipped_multiline))}')
-          print(f'✅ Env sync complete: {created} created, {updated} updated, {skipped} unchanged, {multiline} multiline synced, {removed_multiline} multiline removed')
           PYEOF
 
       - name: Update image tag
@@ -369,7 +267,6 @@ jobs:
           RESP=$(curl -s "https://app.coolify.io/api/v1/deploy?uuid=${RESOURCE_UUID}&force=${FORCE_FLAG}" \
             -H "Authorization: Bearer ${COOLIFY_TOKEN}")
           echo "Deploy response: $RESP"
-          # Services return no deployment_uuid; that's OK — we wait via status check
           DEPLOY_UUID=$(echo "$RESP" | python3 -c "
           import sys, json
           d = json.load(sys.stdin)
@@ -390,7 +287,6 @@ jobs:
           echo "Waiting 3s for Coolify to register the deployment..."
           sleep 3
 
-          # If we have a deployment UUID, poll it
           if [ -n "$DEPLOY_UUID" ]; then
             for i in $(seq 1 18); do
               sleep 5
@@ -405,7 +301,6 @@ jobs:
               esac
             done
           else
-            # Service type: poll service status endpoint
             for i in $(seq 1 18); do
               sleep 5
               STATUS=$(curl -s "https://app.coolify.io/api/v1/services/${RESOURCE_UUID}" \
