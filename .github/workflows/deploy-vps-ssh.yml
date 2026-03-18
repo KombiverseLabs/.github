@@ -253,9 +253,10 @@ jobs:
             exit 1
           fi
 
-          if ! docker compose -f "$COMPOSE_FILE" config --services | grep -Fxq "$COMPOSE_SERVICE"; then
+          compose_services_output="$(docker compose -f "$COMPOSE_FILE" config --services 2>&1 || true)"
+          if ! printf '%s\n' "$compose_services_output" | grep -Fxq "$COMPOSE_SERVICE"; then
             echo "Compose service '$COMPOSE_SERVICE' not found in $COMPOSE_FILE" >&2
-            docker compose -f "$COMPOSE_FILE" config --services
+            printf '%s\n' "$compose_services_output"
             exit 1
           fi
 
