@@ -273,13 +273,32 @@ jobs:
 
       - name: Extract single deploy tag
         id: single-tag
+        env:
+          ALL_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          SHA_TAG=$(echo "${{ steps.meta.outputs.tags }}" | grep "sha-" | head -1)
-          if [ -z "$SHA_TAG" ]; then
-            SHA_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
+          COMMIT_TAG=$(
+            printf '%s\n' "$ALL_TAGS" \
+            | while IFS= read -r ref; do
+                [ -z "$ref" ] && continue
+                tag="${ref##*:}"
+                if printf '%s' "$tag" | grep -Eq '^([A-Za-z0-9_.-]+-)?[0-9a-f]{7,40}$'; then
+                  printf '%s\n' "$ref"
+                fi
+              done \
+            | tail -1
+          )
+
+          if [ -z "$COMMIT_TAG" ]; then
+            COMMIT_TAG=$(printf '%s\n' "$ALL_TAGS" | tail -1)
           fi
-          echo "image=$SHA_TAG" >> $GITHUB_OUTPUT
-          echo "Deploy tag: $SHA_TAG"
+
+          if [ -z "$COMMIT_TAG" ]; then
+            echo "Unable to determine deploy tag from Docker metadata output" >&2
+            exit 1
+          fi
+
+          echo "image=$COMMIT_TAG" >> "$GITHUB_OUTPUT"
+          echo "Deploy tag: $COMMIT_TAG"
 
       - name: Summary
         run: |
