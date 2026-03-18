@@ -176,22 +176,24 @@ jobs:
           port_secret = os.environ['VPS_PORT_SECRET_NAME']
           values['ssh_port'] = str(secret_map.get(port_secret, '')).strip() or '22'
 
-          print(f"::add-mask::{values['ssh_key']}")
+          key_path = os.path.join(os.environ['RUNNER_TEMP'], 'deploy_vps_key')
+          with open(key_path, 'w', encoding='utf-8') as handle:
+              handle.write(values['ssh_key'])
+              if not values['ssh_key'].endswith('\n'):
+                  handle.write('\n')
+          os.chmod(key_path, 0o600)
 
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
               for key in ('ssh_host', 'ssh_user', 'ssh_port'):
                   print(f"{key}={values[key]}", file=handle)
-              print('ssh_key<<EOF', file=handle)
-              print(values['ssh_key'], file=handle)
-              print('EOF', file=handle)
+              print(f"ssh_key_path={key_path}", file=handle)
           PY
 
       - name: Configure SSH
         run: |
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          printf '%s\n' "${{ steps.doppler.outputs.ssh_key }}" > ~/.ssh/deploy_vps_key
-          chmod 600 ~/.ssh/deploy_vps_key
+          install -m 600 "${{ steps.doppler.outputs.ssh_key_path }}" ~/.ssh/deploy_vps_key
           ssh-keyscan -p "${{ steps.doppler.outputs.ssh_port }}" -H "${{ steps.doppler.outputs.ssh_host }}" >> ~/.ssh/known_hosts
 
       - name: Pull and recreate compose service

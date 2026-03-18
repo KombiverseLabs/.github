@@ -130,9 +130,15 @@ runs:
         if [ -z "$ERRORS" ] && [ -n "$EXPECTED_CT" ]; then
           echo ""
           echo "── L2: Content-Type ──"
-          CT=$(curl -sI -L "$URL" --max-time "$TIMEOUT" 2>/dev/null \
-            | grep -i "^content-type:" | head -1 | tr -d '\r')
-          if echo "$CT" | grep -qi "$EXPECTED_CT"; then
+          CT="$(curl -sI -L "$URL" --max-time "$TIMEOUT" 2>/dev/null \
+            | grep -i "^content-type:" | head -1 | tr -d '\r' || true)"
+          if [ -z "$CT" ]; then
+            CT="$(curl -sL -D - -o /dev/null "$URL" --max-time "$TIMEOUT" --connect-timeout 10 2>/dev/null \
+              | grep -i "^content-type:" | head -1 | tr -d '\r' || true)"
+          fi
+          if [ -z "$CT" ]; then
+            ERRORS="L2 FAIL: No Content-Type header returned by $URL"
+          elif printf '%s\n' "$CT" | grep -Fqi -- "$EXPECTED_CT"; then
             LEVEL="L2"
             echo "  ✅ L2 passed ($CT)"
           else
