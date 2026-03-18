@@ -199,7 +199,8 @@ jobs:
 
           token = os.environ['COOLIFY_TOKEN']
           uuid = os.environ['RESOURCE_UUID']
-          image_tag = os.environ['IMAGE_TAG']
+          raw_image_ref = os.environ['IMAGE_TAG'].strip()
+          image_tag = raw_image_ref
           image_repository = os.environ.get('IMAGE_REPOSITORY', '').strip().lower()
           resource_type = os.environ.get('RESOURCE_TYPE', 'service')
           github_repository = os.environ.get('GITHUB_REPOSITORY', '').strip().lower()
@@ -209,6 +210,12 @@ jobs:
               'Content-Type': 'application/json',
               'User-Agent': 'Coolify-Deploy/1.0',
           }
+
+          if not image_repository and raw_image_ref and '@' not in raw_image_ref and '/' in raw_image_ref and ':' in raw_image_ref:
+              candidate_repository, candidate_tag = raw_image_ref.rsplit(':', 1)
+              if candidate_repository and candidate_tag:
+                  image_repository = candidate_repository.lower()
+                  image_tag = candidate_tag
 
           if not image_repository and '/' in github_repository:
               owner, repo = github_repository.split('/', 1)
