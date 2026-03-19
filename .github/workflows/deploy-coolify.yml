@@ -67,6 +67,9 @@ on:
         type: boolean
         default: false
     secrets:
+      DOPPLER_TOKEN:
+        description: 'Optional Doppler token for runtime env synchronization into Coolify'
+        required: false
       COOLIFY_API_TOKEN:
         description: 'Coolify API token (preferred source; GitHub secret)'
         required: false
