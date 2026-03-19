@@ -7,6 +7,11 @@ on:
         description: 'Runner label for the target server host'
         required: true
         type: string
+      validation-image:
+        description: 'Optional image reference to pull after login to verify registry access on the target host'
+        required: false
+        type: string
+        default: ''
     secrets:
       DEPLOY_DOPPLER_TOKEN:
         description: 'Doppler server/service token used to resolve GHCR credentials'
@@ -63,10 +68,12 @@ jobs:
           username = (
               str(secret_map.get('GHCR_USERNAME', '')).strip()
               or str(secret_map.get('GITHUB_REGISTRY_USERNAME', '')).strip()
+              or str(secret_map.get('GITHUB_USERNAME', '')).strip()
+              or os.environ.get('GITHUB_ACTOR', '').strip()
               or 'KombiverseLabs'
           )
           token = ''
-          for key in ('GHCR_TOKEN', 'GHCR_PAT', 'GH_PAT'):
+          for key in ('GHCR_TOKEN', 'GHCR_PAT', 'GH_PAT', 'GITHUB_PAT'):
               value = str(secret_map.get(key, '')).strip()
               if value:
                   token = value
@@ -112,6 +119,13 @@ jobs:
         run: |
           echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
 
+      - name: Verify GHCR pull on target host
+        if: inputs.validation-image != ''
+        env:
+          VALIDATION_IMAGE: ${{ inputs.validation-image }}
+        run: |
+          docker pull "$VALIDATION_IMAGE"
+
       - name: Summary
         run: |
           echo "### GHCR Auth Synced" >> "$GITHUB_STEP_SUMMARY"
@@ -121,3 +135,4 @@ jobs:
           echo "| Runner | \`${{ inputs.runner }}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| User | \`$(whoami)\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Bootstrapped From GitHub | \`${{ steps.ghcr.outputs.used_fallback }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Validation Image | \`${{ inputs.validation-image || 'n/a' }}\` |" >> "$GITHUB_STEP_SUMMARY"

@@ -577,10 +577,10 @@ jobs:
                       f'resource status: {last_resource_status}; ready={resource_ready}'
                   )
 
-                  if last_status == 'finished':
+                  if last_status == 'finished' and resource_ready:
                       break
-                  if last_status in {'error', 'failed'} and resource_ready:
-                      print('Coolify deployment reported failure, but the resource is already ready.')
+                  if last_status in {'error', 'failed'}:
+                      print('Coolify deployment reported failure.')
                       break
               else:
                   last_status = last_resource_status
@@ -588,10 +588,10 @@ jobs:
                   if resource_ready:
                       break
 
-              if resource_ready:
-                  break
-
-          wait_timed_out = not resource_ready and last_status != 'finished'
+          wait_timed_out = (
+              (bool(deploy_uuid) and last_status not in {'finished', 'error', 'failed'})
+              or (not deploy_uuid and not resource_ready)
+          )
           with open(output_path, 'a', encoding='utf-8') as output:
               output.write(f'last_status={last_status}\n')
               output.write(f'resource_status={last_resource_status}\n')
@@ -600,6 +600,10 @@ jobs:
 
           if final_detail:
               print(f'Resource detail: {json.dumps(final_detail, sort_keys=True)}')
+
+          if deploy_uuid and last_status in {'error', 'failed'}:
+              print('❌ Coolify deployment failed')
+              raise SystemExit(1)
 
           if resource_ready:
               print('✅ Resource is ready')
