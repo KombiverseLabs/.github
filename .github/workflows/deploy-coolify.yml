@@ -51,6 +51,21 @@ on:
         required: false
         type: string
         default: 'blacksmith-4vcpu-ubuntu-2204'
+      sync-multiline-secrets:
+        description: 'Whether to sync multiline Doppler secrets into Coolify envs'
+        required: false
+        type: boolean
+        default: false
+      env-allowlist:
+        description: 'Optional comma- or newline-separated list of env keys to sync. Empty means sync all non-skipped keys.'
+        required: false
+        type: string
+        default: ''
+      prune-unmanaged-envs:
+        description: 'Delete Coolify env keys that are not present in Doppler after sync'
+        required: false
+        type: boolean
+        default: false
     secrets:
       COOLIFY_API_TOKEN:
         description: 'Coolify API token (preferred source; GitHub secret)'
@@ -182,6 +197,162 @@ jobs:
               print(f'coolify_api_token={coolify_api_token}', file=handle)
           PYEOF
 
+      - name: Sync env vars from Doppler to Coolify
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          COOLIFY_TOKEN: ${{ steps.resolved-resource-uuid.outputs.coolify_api_token }}
+          RESOURCE_UUID: ${{ steps.resolved-resource-uuid.outputs.resource_uuid }}
+          RESOURCE_TYPE: ${{ inputs.resource-type }}
+          SYNC_MULTILINE_SECRETS: ${{ inputs.sync-multiline-secrets }}
+          ENV_ALLOWLIST: ${{ inputs.env-allowlist }}
+          PRUNE_UNMANAGED_ENVS: ${{ inputs.prune-unmanaged-envs }}
+        run: |
+          # Download secrets from Doppler and upsert each into Coolify one by one.
+          # Coolify Cloud SaaS doesn't support /envs/bulk; use POST (create) / DELETE+POST (update).
+          if [ ! -f /tmp/app_doppler_secrets.json ]; then
+            doppler secrets download --no-file --format json > /tmp/app_doppler_secrets.json
+          fi
+
+          python3 << 'PYEOF'
+          import json, urllib.request, urllib.error, os
+
+          token = os.environ['COOLIFY_TOKEN']
+          uuid = os.environ['RESOURCE_UUID']
+          rtype = os.environ.get('RESOURCE_TYPE', 'application')
+          sync_multiline = os.environ.get('SYNC_MULTILINE_SECRETS', 'false').lower() == 'true'
+          raw_allowlist = os.environ.get('ENV_ALLOWLIST', '')
+          prune_unmanaged = os.environ.get('PRUNE_UNMANAGED_ENVS', 'false').lower() == 'true'
+          allowlist = {
+              item.strip()
+              for chunk in raw_allowlist.splitlines()
+              for item in chunk.split(',')
+              if item.strip()
+          }
+          base = 'https://app.coolify.io/api/v1'
+          headers = {
+              'Authorization': f'Bearer {token}',
+              'Content-Type': 'application/json',
+              'User-Agent': 'Coolify-Deploy/1.0',
+          }
+          skip = {
+              'DOPPLER_CONFIG',
+              'DOPPLER_ENVIRONMENT',
+              'DOPPLER_PROJECT',
+              'ZITADEL_ADMIN_TOKEN',
+              'ZITADEL_MANAGEMENT_TOKEN',
+              'ZITADEL_SERVICE_PAT',
+          }
+
+          with open('/tmp/app_doppler_secrets.json') as f:
+              desired = {}
+              skipped_multiline = set()
+              for key, raw_value in json.load(f).items():
+                  if (
+                      key in skip
+                      or key in {'COOLIFY_API_TOKEN', 'COOLIFY_API_KEY', 'COOLIFY_RESOURCE_UUID'}
+                      or key.endswith('_RESOURCE_UUID')
+                  ):
+                      continue
+                  if allowlist and key not in allowlist:
+                      continue
+                  value = str(raw_value)
+                  is_multiline = '\n' in value or '\r' in value
+                  if is_multiline and not sync_multiline:
+                      skipped_multiline.add(key)
+                      continue
+                  desired[key] = {
+                      'value': value,
+                      'is_multiline': is_multiline,
+                      'is_literal': is_multiline,
+                  }
+
+          def api(method, path, body=None):
+              data = json.dumps(body).encode() if body else None
+              req = urllib.request.Request(f'{base}/{path}', data=data, method=method, headers=headers)
+              try:
+                  with urllib.request.urlopen(req) as r:
+                      return json.loads(r.read() or b'{}'), None
+              except urllib.error.HTTPError as e:
+                  return None, (e.code, e.read().decode()[:300])
+
+          current_list, err = api('GET', f'{rtype}s/{uuid}/envs')
+          if err:
+              print(f'ERROR fetching envs: {err}')
+              raise SystemExit(1)
+          current = {}
+          for entry in current_list:
+              key = entry['key']
+              current.setdefault(key, []).append({
+                  'uuid': entry['uuid'],
+                  'value': entry.get('value', ''),
+                  'is_multiline': bool(entry.get('is_multiline', False)),
+                  'is_literal': bool(entry.get('is_literal', False)),
+              })
+
+          def delete_all(entries):
+              for item in entries:
+                  api('DELETE', f'{rtype}s/{uuid}/envs/{item["uuid"]}')
+
+          removed_multiline = 0
+          for key in sorted(skipped_multiline):
+              if key not in current:
+                  continue
+              delete_all(current[key])
+              removed_multiline += 1
+
+          pruned = duplicate_repairs = created = updated = skipped = multiline = 0
+          for key, spec in desired.items():
+              payload = {
+                  'key': key,
+                  'value': spec['value'],
+                  'is_multiline': spec['is_multiline'],
+                  'is_literal': spec['is_literal'],
+              }
+              if spec['is_multiline']:
+                  multiline += 1
+              existing_entries = current.get(key, [])
+              if existing_entries:
+                  same_value = (
+                      len(existing_entries) == 1
+                      and existing_entries[0]['value'] == spec['value']
+                      and existing_entries[0]['is_multiline'] == spec['is_multiline']
+                      and existing_entries[0]['is_literal'] == spec['is_literal']
+                  )
+                  if same_value:
+                      skipped += 1
+                      continue
+                  if len(existing_entries) > 1:
+                      duplicate_repairs += len(existing_entries) - 1
+                  delete_all(existing_entries)
+                  r, err = api('POST', f'{rtype}s/{uuid}/envs', payload)
+                  if err:
+                      print(f'  FAIL {key}: {err}')
+                  else:
+                      updated += 1
+              else:
+                  r, err = api('POST', f'{rtype}s/{uuid}/envs', payload)
+                  if err and err[0] == 409:
+                      skipped += 1  # already exists with same value
+                  elif err:
+                      print(f'  FAIL {key}: {err}')
+                  else:
+                      created += 1
+
+          if prune_unmanaged:
+              for key, entries in current.items():
+                  if key in desired or key in skipped_multiline or key in skip:
+                      continue
+                  delete_all(entries)
+                  pruned += len(entries)
+
+          if skipped_multiline:
+              print(f'⚠️ Skipped multiline secrets: {", ".join(sorted(skipped_multiline))}')
+          print(
+              f'✅ Env sync complete: {created} created, {updated} updated, {skipped} unchanged, '
+              f'{multiline} multiline synced, {removed_multiline} multiline removed, '
+              f'{duplicate_repairs} duplicate entries repaired, {pruned} unmanaged entries pruned'
+          )
+          PYEOF
       - name: Update image tag
         if: inputs.image-tag != 'latest'
         env:

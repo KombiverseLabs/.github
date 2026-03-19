@@ -64,6 +64,12 @@ on:
       image:
         description: 'Full image reference with SHA tag'
         value: ${{ jobs.build.outputs.image }}
+      image_tag:
+        description: 'Resolved deploy tag'
+        value: ${{ jobs.build.outputs.image_tag }}
+      image_repository:
+        description: 'Resolved image repository'
+        value: ${{ jobs.build.outputs.image_repository }}
       digest:
         description: 'Image digest'
         value: ${{ jobs.build.outputs.digest }}
@@ -85,6 +91,8 @@ jobs:
       packages: write
     outputs:
       image: ${{ steps.single-tag.outputs.image }}
+      image_tag: ${{ steps.deploy-ref.outputs.image_tag }}
+      image_repository: ${{ steps.deploy-ref.outputs.image_repository }}
       digest: ${{ steps.build.outputs.digest }}
 
     steps:
@@ -248,6 +256,7 @@ jobs:
         with:
           images: ${{ steps.image-name.outputs.name }}
           tags: |
+            type=raw,value=${{ inputs.tag-prefix }}git-${{ github.sha }}
             type=sha,prefix=${{ inputs.tag-prefix }}
             type=raw,value=${{ inputs.tag-prefix }}latest
             type=ref,event=branch,prefix=${{ inputs.tag-prefix }}
@@ -276,18 +285,23 @@ jobs:
         env:
           ALL_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          COMMIT_TAG=$(
+          select_tag() {
+            pattern="$1"
             printf '%s\n' "$ALL_TAGS" \
-            | while IFS= read -r ref; do
-                [ -z "$ref" ] && continue
-                tag="${ref##*:}"
-                if printf '%s' "$tag" | grep -Eq '^([A-Za-z0-9_.-]+-)?[0-9a-f]{7,40}$'; then
-                  printf '%s\n' "$ref"
-                fi
-              done \
-            | tail -1
-          )
+              | while IFS= read -r ref; do
+                  [ -z "$ref" ] && continue
+                  tag="${ref##*:}"
+                  if printf '%s' "$tag" | grep -Eq "$pattern"; then
+                    printf '%s\n' "$ref"
+                  fi
+                done \
+              | tail -1
+          }
 
+          COMMIT_TAG=$(select_tag '^([A-Za-z0-9_.-]+-)?git-[0-9a-f]{7,40}$')
+          if [ -z "$COMMIT_TAG" ]; then
+            COMMIT_TAG=$(select_tag '^([A-Za-z0-9_.-]+-)?[0-9a-f]{7,40}$')
+          fi
           if [ -z "$COMMIT_TAG" ]; then
             COMMIT_TAG=$(printf '%s\n' "$ALL_TAGS" | tail -1)
           fi
@@ -299,6 +313,17 @@ jobs:
 
           echo "image=$COMMIT_TAG" >> "$GITHUB_OUTPUT"
           echo "Deploy tag: $COMMIT_TAG"
+
+      - name: Extract deploy repository and tag
+        id: deploy-ref
+        run: |
+          IMAGE_REF="${{ steps.single-tag.outputs.image }}"
+          IMAGE_REPOSITORY="${IMAGE_REF%:*}"
+          IMAGE_TAG="${IMAGE_REF##*:}"
+          echo "image_repository=$IMAGE_REPOSITORY" >> $GITHUB_OUTPUT
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "Deploy repository: $IMAGE_REPOSITORY"
+          echo "Deploy tag: $IMAGE_TAG"
 
       - name: Summary
         run: |
