@@ -239,7 +239,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GH_PAT != '' && secrets.GH_PAT || github.token }}
 
       - name: Determine image name
         id: image-name
