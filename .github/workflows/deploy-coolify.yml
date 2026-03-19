@@ -481,40 +481,136 @@ jobs:
           echo "Waiting 3s for Coolify to register the deployment..."
           sleep 3
 
-          if [ -n "$DEPLOY_UUID" ]; then
-            for i in $(seq 1 18); do
-              sleep 5
-              STATUS=$(curl -s "https://app.coolify.io/api/v1/deployments/${DEPLOY_UUID}" \
-                -H "Authorization: Bearer ${COOLIFY_TOKEN}" \
-                | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','unknown'))" 2>/dev/null || echo "unknown")
-              echo "  [${i}] deployment status: $STATUS"
-              echo "last_status=${STATUS}" >> "$GITHUB_OUTPUT"
-              case "$STATUS" in
-                finished) echo "✅ Deployment complete"; exit 0 ;;
-                error|failed) echo "❌ Deployment failed"; exit 1 ;;
-              esac
-            done
-          else
-            for i in $(seq 1 18); do
-              sleep 5
-              STATUS=$(curl -s "https://app.coolify.io/api/v1/services/${RESOURCE_UUID}" \
-                -H "Authorization: Bearer ${COOLIFY_TOKEN}" \
-                | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','unknown'))" 2>/dev/null || echo "unknown")
-              echo "  [${i}] service status: $STATUS"
-              echo "last_status=${STATUS}" >> "$GITHUB_OUTPUT"
-              case "$STATUS" in
-                running*) echo "✅ Service is running"; exit 0 ;;
-                exited|error) echo "❌ Service failed to start"; exit 1 ;;
-              esac
-            done
-          fi
+          python3 <<'PYEOF'
+          import json
+          import os
+          import re
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
 
-          echo "wait_timed_out=true" >> "$GITHUB_OUTPUT"
-          if [ -n "$HEALTH_CHECK_URL" ]; then
-            echo "⚠️  Coolify did not report a ready state in time; continuing to HTTP health check"
-          else
-            echo "⚠️  Coolify did not report a ready state in time and no HTTP health check was configured"
-          fi
+          base = 'https://app.coolify.io/api/v1'
+          token = os.environ['COOLIFY_TOKEN']
+          resource_uuid = os.environ['RESOURCE_UUID']
+          resource_type = os.environ.get('RESOURCE_TYPE', 'application')
+          deploy_uuid = os.environ.get('DEPLOY_UUID', '').strip()
+          health_check_url = os.environ.get('HEALTH_CHECK_URL', '').strip()
+          output_path = os.environ['GITHUB_OUTPUT']
+          headers = {
+              'Authorization': f'Bearer {token}',
+              'User-Agent': 'Coolify-Deploy/1.0',
+          }
+
+          def api(path):
+              request = urllib.request.Request(f'{base}/{path}', headers=headers)
+              with urllib.request.urlopen(request) as response:
+                  return json.loads(response.read() or b'{}')
+
+          def parse_compose_service_names(compose_text):
+              names = []
+              in_services = False
+              for line in (compose_text or '').splitlines():
+                  if not in_services:
+                      if line.strip() == 'services:':
+                          in_services = True
+                      continue
+                  if line and not line.startswith(' '):
+                      break
+                  match = re.match(r'^\s{2}([A-Za-z0-9._-]+):\s*$', line)
+                  if match:
+                      names.append(match.group(1))
+              return names
+
+          def evaluate_resource():
+              payload = api(f'{resource_type}s/{resource_uuid}')
+              resource_status = str(payload.get('status') or 'unknown')
+              detail = {'resource_status': resource_status}
+
+              if resource_type == 'application':
+                  ready = resource_status.startswith('running')
+                  return ready, resource_status, detail
+
+              compose = payload.get('docker_compose_raw') or payload.get('docker_compose') or ''
+              desired_services = parse_compose_service_names(compose)
+              application_statuses = {
+                  str(app.get('name')): str(app.get('status') or 'unknown')
+                  for app in (payload.get('applications') or [])
+              }
+              desired_statuses = {
+                  name: application_statuses.get(name, 'missing')
+                  for name in desired_services
+              }
+              detail['desired_services'] = desired_statuses
+              if desired_statuses:
+                  ready = all(status.startswith('running') for status in desired_statuses.values())
+              else:
+                  ready = resource_status.startswith('running')
+              return ready, resource_status, detail
+
+          last_status = 'unknown'
+          last_resource_status = 'unknown'
+          resource_ready = False
+          final_detail = {}
+
+          for attempt in range(1, 19):
+              time.sleep(5)
+
+              try:
+                  resource_ready, last_resource_status, final_detail = evaluate_resource()
+              except Exception as exc:
+                  print(f'  [{attempt}] resource evaluation failed: {exc}')
+                  resource_ready = False
+                  last_resource_status = 'unknown'
+                  final_detail = {}
+
+              if deploy_uuid:
+                  try:
+                      deployment = api(f'deployments/{deploy_uuid}')
+                      last_status = str(deployment.get('status') or 'unknown')
+                  except Exception as exc:
+                      print(f'  [{attempt}] deployment status lookup failed: {exc}')
+                      last_status = 'unknown'
+
+                  print(
+                      f'  [{attempt}] deployment status: {last_status}; '
+                      f'resource status: {last_resource_status}; ready={resource_ready}'
+                  )
+
+                  if last_status == 'finished':
+                      break
+                  if last_status in {'error', 'failed'} and resource_ready:
+                      print('Coolify deployment reported failure, but the resource is already ready.')
+                      break
+              else:
+                  last_status = last_resource_status
+                  print(f'  [{attempt}] resource status: {last_resource_status}; ready={resource_ready}')
+                  if resource_ready:
+                      break
+
+              if resource_ready:
+                  break
+
+          wait_timed_out = not resource_ready and last_status != 'finished'
+          with open(output_path, 'a', encoding='utf-8') as output:
+              output.write(f'last_status={last_status}\n')
+              output.write(f'resource_status={last_resource_status}\n')
+              output.write(f'resource_ready={"true" if resource_ready else "false"}\n')
+              output.write(f'wait_timed_out={"true" if wait_timed_out else "false"}\n')
+
+          if final_detail:
+              print(f'Resource detail: {json.dumps(final_detail, sort_keys=True)}')
+
+          if resource_ready:
+              print('✅ Resource is ready')
+              raise SystemExit(0)
+
+          if health_check_url:
+              print('⚠️  Resource is not ready yet according to Coolify; continuing to HTTP health check')
+          else:
+              print('⚠️  Resource is not ready yet according to Coolify and no HTTP health check is configured')
+          raise SystemExit(0)
+          PYEOF
 
       - name: Show Coolify resource state
         if: always()
@@ -560,9 +656,9 @@ jobs:
           exit 1
 
       - name: Enforce deploy readiness without HTTP probe
-        if: inputs.health-check-url == '' && steps.wait-for-deploy.outputs.wait_timed_out == 'true'
+        if: inputs.health-check-url == '' && steps.wait-for-deploy.outputs.resource_ready != 'true'
         run: |
-          echo "❌ Coolify did not report a ready state before timeout and no HTTP probe is configured"
+          echo "❌ Coolify did not report a ready resource state and no HTTP probe is configured"
           exit 1
 
       - name: Deployment summary
@@ -577,4 +673,6 @@ jobs:
           echo "| **Image Tag** | \`${{ inputs.image-tag }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Wait Timed Out** | ${{ steps.wait-for-deploy.outputs.wait_timed_out || 'false' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Last Coolify Status** | \`${{ steps.wait-for-deploy.outputs.last_status || 'unknown' }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Resource Status** | \`${{ steps.wait-for-deploy.outputs.resource_status || 'unknown' }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Resource Ready** | ${{ steps.wait-for-deploy.outputs.resource_ready || 'false' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Status** | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
