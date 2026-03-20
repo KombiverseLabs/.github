@@ -256,8 +256,7 @@ jobs:
             mkdir -p "$CACHE_ROOT"
           fi
           REPO_SLUG="${GITHUB_REPOSITORY//\//-}"
-          RUNNER_SLUG="${RUNNER_NAME// /-}"
-          CACHE_DIR="${CACHE_ROOT}/${RUNNER_SLUG}/${REPO_SLUG}"
+          CACHE_DIR="${CACHE_ROOT}/${REPO_SLUG}"
           CACHE_NEW_DIR="${CACHE_DIR}-new"
 
           mkdir -p "$CACHE_DIR" "$CACHE_NEW_DIR"
