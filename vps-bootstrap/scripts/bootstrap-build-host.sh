@@ -60,6 +60,9 @@ sudo sysctl --system >/dev/null
 cat <<'EOF' | sudo tee /etc/profile.d/kombify-build-host.sh >/dev/null
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
+export FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true
+export KOMBIFY_ARTIFACTS_ROOT=/var/lib/kombify-artifacts
+export KOMBIFY_BUILDX_CACHE_ROOT=/var/lib/kombify-buildx-cache
 EOF
 
 sudo mkdir -p /opt/actions-runners

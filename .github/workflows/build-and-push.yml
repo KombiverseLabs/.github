@@ -97,7 +97,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Doppler CLI
         if: inputs.doppler-build-secrets != '' || inputs.doppler-runtime-env-secret-id != ''
@@ -247,14 +247,28 @@ jobs:
           echo "Failed to cache moby/buildkit:buildx-stable-1 on the runner" >&2
           exit 1
 
+      - name: Prepare local build cache
+        id: local-cache
+        run: |
+          CACHE_ROOT="${KOMBIFY_BUILDX_CACHE_ROOT:-/var/lib/kombify-buildx-cache}"
+          REPO_SLUG="${GITHUB_REPOSITORY//\//-}"
+          RUNNER_SLUG="${RUNNER_NAME// /-}"
+          CACHE_DIR="${CACHE_ROOT}/${RUNNER_SLUG}/${REPO_SLUG}"
+          CACHE_NEW_DIR="${CACHE_DIR}-new"
+
+          mkdir -p "$CACHE_DIR" "$CACHE_NEW_DIR"
+
+          echo "cache_dir=$CACHE_DIR" >> "$GITHUB_OUTPUT"
+          echo "cache_new_dir=$CACHE_NEW_DIR" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
         with:
           driver-opts: image=moby/buildkit:buildx-stable-1
 
       - name: Log in to GHCR
         if: inputs.push
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -271,7 +285,7 @@ jobs:
 
       - name: Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ steps.image-name.outputs.name }}
           tags: |
@@ -282,7 +296,7 @@ jobs:
 
       - name: Build and push
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ inputs.context }}
           file: ${{ inputs.dockerfile }}
@@ -296,8 +310,19 @@ jobs:
             ${{ steps.doppler-build-secrets.outputs.docker_secrets }}
           secret-files: |
             ${{ steps.doppler-runtime-env.outputs.docker_secret_file }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=local,src=${{ steps.local-cache.outputs.cache_dir }}
+          cache-to: type=local,dest=${{ steps.local-cache.outputs.cache_new_dir }},mode=max
+
+      - name: Finalize local build cache
+        if: always()
+        run: |
+          CACHE_DIR="${{ steps.local-cache.outputs.cache_dir }}"
+          CACHE_NEW_DIR="${{ steps.local-cache.outputs.cache_new_dir }}"
+
+          if [ -d "$CACHE_NEW_DIR" ] && [ "$(find "$CACHE_NEW_DIR" -mindepth 1 -maxdepth 1 | wc -l)" -gt 0 ]; then
+            rm -rf "$CACHE_DIR"
+            mv "$CACHE_NEW_DIR" "$CACHE_DIR"
+          fi
 
       - name: Extract single deploy tag
         id: single-tag

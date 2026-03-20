@@ -28,6 +28,9 @@ if ! id "$RUNNER_USER" &>/dev/null; then
 fi
 sudo usermod -aG docker "$RUNNER_USER"
 
+sudo mkdir -p /var/lib/kombify-artifacts /var/lib/kombify-buildx-cache
+sudo chown -R "$RUNNER_USER:$RUNNER_USER" /var/lib/kombify-artifacts /var/lib/kombify-buildx-cache
+
 sudo mkdir -p "$RUNNER_DIR"
 sudo chown -R "$RUNNER_USER:$RUNNER_USER" "$RUNNER_DIR"
 
@@ -68,6 +71,13 @@ SERVICE_NAME="actions.runner.${GITHUB_ORG}.${RUNNER_NAME}.service"
 if [ ! -f "/etc/systemd/system/${SERVICE_NAME}" ]; then
   sudo ./svc.sh install "$RUNNER_USER"
 fi
+sudo mkdir -p "/etc/systemd/system/${SERVICE_NAME}.d"
+cat <<EOF | sudo tee "/etc/systemd/system/${SERVICE_NAME}.d/override.conf" >/dev/null
+[Service]
+Environment=FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true
+Environment=KOMBIFY_ARTIFACTS_ROOT=/var/lib/kombify-artifacts
+Environment=KOMBIFY_BUILDX_CACHE_ROOT=/var/lib/kombify-buildx-cache
+EOF
 sudo systemctl daemon-reload
 sudo systemctl enable "$SERVICE_NAME"
 sudo systemctl restart "$SERVICE_NAME"
