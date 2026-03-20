@@ -251,6 +251,10 @@ jobs:
         id: local-cache
         run: |
           CACHE_ROOT="${KOMBIFY_BUILDX_CACHE_ROOT:-/var/lib/kombify-buildx-cache}"
+          if ! mkdir -p "$CACHE_ROOT" >/dev/null 2>&1; then
+            CACHE_ROOT="${HOME}/.cache/kombify-buildx-cache"
+            mkdir -p "$CACHE_ROOT"
+          fi
           REPO_SLUG="${GITHUB_REPOSITORY//\//-}"
           RUNNER_SLUG="${RUNNER_NAME// /-}"
           CACHE_DIR="${CACHE_ROOT}/${RUNNER_SLUG}/${REPO_SLUG}"
