@@ -149,7 +149,8 @@ jobs:
       - name: Resolve deploy secrets from Doppler
         id: doppler
         env:
-          DOPPLER_TOKEN: ${{ secrets.DEPLOY_DOPPLER_TOKEN != '' && secrets.DEPLOY_DOPPLER_TOKEN || secrets.DOPPLER_TOKEN }}
+          APP_DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DEPLOY_DOPPLER_TOKEN: ${{ secrets.DEPLOY_DOPPLER_TOKEN }}
           VPS_HOST_SECRET_NAME: ${{ inputs.vps-host-secret-name }}
           VPS_USER_SECRET_NAME: ${{ inputs.vps-user-secret-name }}
           VPS_PRIVATE_KEY_SECRET_NAME: ${{ inputs.vps-private-key-secret-name }}
@@ -158,7 +159,12 @@ jobs:
           GHCR_TOKEN_SECRET_NAME: ${{ inputs.ghcr-token-secret-name }}
         run: |
           set -euo pipefail
-          doppler secrets download --no-file --format json > /tmp/doppler_vps_deploy.json
+          RESOLVED_DOPPLER_TOKEN="${DEPLOY_DOPPLER_TOKEN:-${APP_DOPPLER_TOKEN:-}}"
+          if [ -z "$RESOLVED_DOPPLER_TOKEN" ]; then
+            echo "A Doppler token is required for remote deploy secret resolution." >&2
+            exit 1
+          fi
+          DOPPLER_TOKEN="$RESOLVED_DOPPLER_TOKEN" doppler secrets download --no-file --format json > /tmp/doppler_vps_deploy.json
 
           python3 <<'PY'
           import json
