@@ -205,6 +205,89 @@ jobs:
               print(f'coolify_api_token={coolify_api_token}', file=handle)
           PYEOF
 
+      - name: Validate Coolify resource contract
+        id: validate-resource
+        env:
+          COOLIFY_TOKEN: ${{ steps.resolved-resource-uuid.outputs.coolify_api_token }}
+          RESOURCE_UUID: ${{ steps.resolved-resource-uuid.outputs.resource_uuid }}
+          RESOURCE_TYPE: ${{ inputs.resource-type }}
+        run: |
+          python3 << 'PYEOF'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          token = os.environ['COOLIFY_TOKEN']
+          resource_uuid = os.environ['RESOURCE_UUID'].strip()
+          resource_type = (os.environ.get('RESOURCE_TYPE', 'application') or 'application').strip().lower()
+          if resource_type not in {'application', 'service', 'database'}:
+              print(
+                  f"Unsupported Coolify resource type {resource_type!r}. Expected application, service, or database.",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+          endpoint_map = {
+              'application': 'applications',
+              'service': 'services',
+              'database': 'databases',
+          }
+          base = 'https://app.coolify.io/api/v1'
+          headers = {
+              'Authorization': f'Bearer {token}',
+              'User-Agent': 'Coolify-Deploy/1.0',
+              'Content-Type': 'application/json',
+          }
+
+          request = urllib.request.Request(
+              f"{base}/{endpoint_map[resource_type]}",
+              headers=headers,
+              method='GET',
+          )
+          try:
+              with urllib.request.urlopen(request) as response:
+                  resources = json.load(response)
+          except urllib.error.HTTPError as exc:
+              print(f'Failed to load Coolify {resource_type} list: HTTP {exc.code}', file=sys.stderr)
+              raise
+
+          if not isinstance(resources, list):
+              print(f'Coolify returned unexpected payload for {resource_type} list.', file=sys.stderr)
+              raise SystemExit(1)
+
+          resource = next((item for item in resources if str(item.get('uuid', '')).strip() == resource_uuid), None)
+          if resource is None:
+              print(
+                  f'Coolify {resource_type} resource {resource_uuid} was not found. '
+                  'Check the Doppler secret and workflow resource-type.',
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+          name = str(resource.get('name', '')).strip()
+          status = str(resource.get('status', '')).strip()
+          server_name = (
+              str(resource.get('destination', {}).get('server', {}).get('name', '')).strip()
+              or str(resource.get('server', {}).get('name', '')).strip()
+          )
+
+          if status.startswith('exited'):
+              print(
+                  f'Coolify {resource_type} {name or resource_uuid} is currently exited. '
+                  'Refusing deployment until the target resource is corrected.',
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+          print(f'Validated Coolify {resource_type}: {name or resource_uuid} on {server_name or "unknown-server"} ({status or "unknown-status"})')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
+              print(f'resource_name={name}', file=handle)
+              print(f'resource_status={status}', file=handle)
+              print(f'server_name={server_name}', file=handle)
+          PYEOF
+
       - name: Sync env vars from Doppler to Coolify
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
