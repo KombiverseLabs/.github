@@ -101,9 +101,21 @@ on:
         required: false
         type: string
         default: "VPS_SSH_PORT"
+      ghcr-username-secret-name:
+        description: "Optional Doppler secret name containing the GHCR username for remote docker login"
+        required: false
+        type: string
+        default: "GHCR_USERNAME"
+      ghcr-token-secret-name:
+        description: "Optional Doppler secret name containing the GHCR token/PAT for remote docker login"
+        required: false
+        type: string
+        default: "GHCR_PAT"
     secrets:
       DOPPLER_TOKEN:
         required: true
+      DEPLOY_DOPPLER_TOKEN:
+        required: false
 
 jobs:
   pick-runner:
@@ -137,11 +149,13 @@ jobs:
       - name: Resolve deploy secrets from Doppler
         id: doppler
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN: ${{ secrets.DEPLOY_DOPPLER_TOKEN != '' && secrets.DEPLOY_DOPPLER_TOKEN || secrets.DOPPLER_TOKEN }}
           VPS_HOST_SECRET_NAME: ${{ inputs.vps-host-secret-name }}
           VPS_USER_SECRET_NAME: ${{ inputs.vps-user-secret-name }}
           VPS_PRIVATE_KEY_SECRET_NAME: ${{ inputs.vps-private-key-secret-name }}
           VPS_PORT_SECRET_NAME: ${{ inputs.vps-port-secret-name }}
+          GHCR_USERNAME_SECRET_NAME: ${{ inputs.ghcr-username-secret-name }}
+          GHCR_TOKEN_SECRET_NAME: ${{ inputs.ghcr-token-secret-name }}
         run: |
           set -euo pipefail
           doppler secrets download --no-file --format json > /tmp/doppler_vps_deploy.json
@@ -176,6 +190,11 @@ jobs:
           port_secret = os.environ['VPS_PORT_SECRET_NAME']
           values['ssh_port'] = str(secret_map.get(port_secret, '')).strip() or '22'
 
+          ghcr_username_secret = os.environ.get('GHCR_USERNAME_SECRET_NAME', '').strip()
+          ghcr_token_secret = os.environ.get('GHCR_TOKEN_SECRET_NAME', '').strip()
+          ghcr_username = str(secret_map.get(ghcr_username_secret, '')).strip() if ghcr_username_secret else ''
+          ghcr_token = str(secret_map.get(ghcr_token_secret, '')).strip() if ghcr_token_secret else ''
+
           key_path = os.path.join(os.environ['RUNNER_TEMP'], 'deploy_vps_key')
           with open(key_path, 'w', encoding='utf-8') as handle:
               handle.write(values['ssh_key'])
@@ -183,10 +202,17 @@ jobs:
                   handle.write('\n')
           os.chmod(key_path, 0o600)
 
+          if ghcr_username:
+              print(f"::add-mask::{ghcr_username}")
+          if ghcr_token:
+              print(f"::add-mask::{ghcr_token}")
+
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
               for key in ('ssh_host', 'ssh_user', 'ssh_port'):
                   print(f"{key}={values[key]}", file=handle)
               print(f"ssh_key_path={key_path}", file=handle)
+              print(f"ghcr_username={ghcr_username}", file=handle)
+              print(f"ghcr_token={ghcr_token}", file=handle)
           PY
 
       - name: Configure SSH
@@ -208,6 +234,8 @@ jobs:
           IMAGE_TAG_VARIABLE: ${{ inputs.image-tag-variable }}
           DOCKER_PULL: ${{ inputs.docker-pull }}
           FORCE_RECREATE: ${{ inputs.force-recreate }}
+          GHCR_USERNAME: ${{ steps.doppler.outputs.ghcr_username }}
+          GHCR_TOKEN: ${{ steps.doppler.outputs.ghcr_token }}
         run: |
           set -euo pipefail
 
@@ -218,9 +246,11 @@ jobs:
           image_tag_var_escaped=$(printf '%q' "$IMAGE_TAG_VARIABLE")
           docker_pull_escaped=$(printf '%q' "$DOCKER_PULL")
           force_recreate_escaped=$(printf '%q' "$FORCE_RECREATE")
+          ghcr_username_escaped=$(printf '%q' "$GHCR_USERNAME")
+          ghcr_token_escaped=$(printf '%q' "$GHCR_TOKEN")
 
           ssh -i ~/.ssh/deploy_vps_key -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
-            "REMOTE_DIR=$remote_dir_escaped COMPOSE_FILE_INPUT=$compose_file_escaped COMPOSE_SERVICE=$service_escaped IMAGE_TAG=$image_tag_escaped IMAGE_TAG_VARIABLE=$image_tag_var_escaped DOCKER_PULL=$docker_pull_escaped FORCE_RECREATE=$force_recreate_escaped bash -s" <<'EOF'
+            "REMOTE_DIR=$remote_dir_escaped COMPOSE_FILE_INPUT=$compose_file_escaped COMPOSE_SERVICE=$service_escaped IMAGE_TAG=$image_tag_escaped IMAGE_TAG_VARIABLE=$image_tag_var_escaped DOCKER_PULL=$docker_pull_escaped FORCE_RECREATE=$force_recreate_escaped GHCR_USERNAME=$ghcr_username_escaped GHCR_TOKEN=$ghcr_token_escaped bash -s" <<'EOF'
           set -euo pipefail
 
           expand_path() {
@@ -286,6 +316,10 @@ jobs:
             ' "$env_file" > "$tmp_file"
             mv "$tmp_file" "$env_file"
             echo "Set $IMAGE_TAG_VARIABLE=$resolved_tag"
+          fi
+
+          if [ -n "${GHCR_USERNAME:-}" ] && [ -n "${GHCR_TOKEN:-}" ]; then
+            printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
           fi
 
           if [ "$DOCKER_PULL" = "true" ]; then
