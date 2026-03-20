@@ -32,6 +32,7 @@ fi
 
 bash "$BOOTSTRAP_DIR/install-docker.sh"
 bash "$BOOTSTRAP_DIR/install-dagger.sh"
+bash "$BOOTSTRAP_DIR/install-doppler.sh"
 
 sudo mkdir -p /etc/docker
 cat <<'EOF' | sudo tee /etc/docker/daemon.json >/dev/null

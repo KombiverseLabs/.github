@@ -22,6 +22,9 @@ class RunnerPlatformContractTest(unittest.TestCase):
         self.assertIn('install-runner-health-monitor.sh', BOOTSTRAP)
         self.assertIn('kombify-runner-health.timer', BOOTSTRAP)
 
+    def test_bootstrap_installs_doppler_cli(self) -> None:
+        self.assertIn('install-doppler.sh', BOOTSTRAP)
+
     def test_runner_installer_uses_current_runner_version(self) -> None:
         self.assertIn('RUNNER_VERSION="${RUNNER_VERSION:-2.332.0}"', INSTALL_RUNNER)
 

@@ -115,6 +115,11 @@ jobs:
             exit 0
           fi
 
+          if ! command -v sudo >/dev/null 2>&1 || ! sudo -n true >/dev/null 2>&1; then
+            echo "doppler CLI is required on deploy runners. Bootstrap the runner with install-doppler.sh or provide resource-uuid and COOLIFY_API_TOKEN directly." >&2
+            exit 1
+          fi
+
           sudo mkdir -p /usr/share/keyrings
           if [ ! -f /usr/share/keyrings/doppler-archive-keyring.gpg ]; then
             curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
