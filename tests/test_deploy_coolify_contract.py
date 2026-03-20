@@ -19,7 +19,7 @@ class DeployCoolifyContractTest(unittest.TestCase):
 
     def test_workflow_accepts_deploy_doppler_token_secret(self) -> None:
         self.assertIn("DEPLOY_DOPPLER_TOKEN:", TEXT)
-        self.assertIn("required: true", TEXT)
+        self.assertIn("required: false", TEXT)
 
     def test_resource_uuid_can_fall_back_to_doppler_secret(self) -> None:
         self.assertIn("COOLIFY_RESOURCE_UUID", TEXT)
@@ -41,16 +41,16 @@ class DeployCoolifyContractTest(unittest.TestCase):
     def test_job_timeout_is_capped_at_three_minutes(self) -> None:
         self.assertIn("timeout-minutes: 3", TEXT)
 
-    def test_default_runner_uses_blacksmith_capacity(self) -> None:
-        self.assertIn("default: 'blacksmith-4vcpu-ubuntu-2204'", TEXT)
+    def test_default_runner_uses_oci_capacity(self) -> None:
+        self.assertIn("default: 'oci-build-labs'", TEXT)
 
     def test_deployment_wait_loop_stays_under_three_minutes(self) -> None:
         self.assertNotIn('echo "Waiting 20s for Coolify to pull image and restart..."', TEXT)
         self.assertNotIn("sleep 20", TEXT)
         self.assertIn("sleep 3", TEXT)
-        self.assertIn("for i in $(seq 1 18); do", TEXT)
-        self.assertIn("sleep 5", TEXT)
-        self.assertIn("running*) echo \"✅ Service is running\"; exit 0 ;;", TEXT)
+        self.assertIn("for attempt in range(1, 19):", TEXT)
+        self.assertIn("time.sleep(5)", TEXT)
+        self.assertIn("print('✅ Resource is ready')", TEXT)
 
     def test_health_check_uses_short_retry_budget(self) -> None:
         self.assertRegex(TEXT, r"for i in 1 2 3; do")

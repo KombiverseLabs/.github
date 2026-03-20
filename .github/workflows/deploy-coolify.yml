@@ -50,7 +50,7 @@ on:
         description: 'Runner label to execute the deployment on'
         required: false
         type: string
-        default: 'blacksmith-4vcpu-ubuntu-2204'
+        default: 'oci-build-labs'
       sync-multiline-secrets:
         description: 'Whether to sync multiline Doppler secrets into Coolify envs'
         required: false

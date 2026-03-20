@@ -2,31 +2,32 @@
 #
 # HOW IT WORKS
 # ────────────
-# The `pick` job runs ON the preferred runner itself (blacksmith-4vcpu-ubuntu-2204 by
-# default).  This guarantees that runner selection NEVER consumes
-# GitHub-hosted minutes — an exhausted Actions budget can never block
-# the pipeline.
+# The `pick` job runs ON the preferred runner itself (`oci-build-labs` by
+# default). This keeps runner selection on self-hosted capacity and avoids
+# spending hosted minutes unless a caller explicitly opts into a hosted runner.
 #
-# If the preferred runner is offline the job queues until it recovers.
-# It will NOT fall back to a hosted runner automatically; automatic
-# fallback to ubuntu-latest would re-introduce hosted-minute consumption
-# and break builds whenever the budget is zero.
+# `oci-build-labs` is a shared label backed by the OCI build host runner pool.
+# If the preferred runner is offline the job queues until it recovers. There is
+# no automatic fallback chain in this workflow.
 #
-# To explicitly use a cloud runner, pass preferred: 'ubuntu-latest'.
-# That is a conscious, per-caller decision that accepts budget dependency.
+# To explicitly use another runner class, pass `preferred` from the caller.
+# Examples:
+# - `oci-build-core`  for SaaS core repos
+# - `oci-build-tools` for Stack/Sim/tooling repos
+# - `srv1161760-labs` for temporary fallback
+# - `ubuntu-latest` only when hosted capacity is intentionally acceptable
 #
-# Chain (default): blacksmith-4vcpu-ubuntu-2204
-# NOTE: kombify-ionos is the production host — never add it to this chain.
+# NOTE: `kombify-ionos` is the production host — never use it as CI capacity.
 name: Pick Runner
 
 on:
   workflow_call:
     inputs:
       preferred:
-        description: 'Runner label to use. Defaults to blacksmith-4vcpu-ubuntu-2204.'
+        description: 'Runner label to use. Defaults to oci-build-labs.'
         required: false
         type: string
-        default: 'blacksmith-4vcpu-ubuntu-2204'
+        default: 'oci-build-labs'
     secrets:
       GH_PAT:
         required: false
@@ -38,9 +39,7 @@ on:
 jobs:
   pick:
     name: Select runner
-    # Run ON the preferred runner so this job itself never consumes
-    # GitHub-hosted minutes.  Budget exhaustion cannot block the pipeline.
-    runs-on: ${{ inputs.preferred || 'blacksmith-4vcpu-ubuntu-2204' }}
+    runs-on: ${{ inputs.preferred || 'oci-build-labs' }}
     timeout-minutes: 3
     outputs:
       runner: ${{ steps.select.outputs.runner }}
@@ -48,6 +47,6 @@ jobs:
       - name: Output selected runner
         id: select
         run: |
-          RUNNER="${{ inputs.preferred || 'blacksmith-4vcpu-ubuntu-2204' }}"
+          RUNNER="${{ inputs.preferred || 'oci-build-labs' }}"
           echo "runner=$RUNNER" >> "$GITHUB_OUTPUT"
           echo "→ Selected: $RUNNER"

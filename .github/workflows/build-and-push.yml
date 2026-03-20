@@ -51,7 +51,7 @@ on:
         type: boolean
         default: true
       runner:
-        description: 'Preferred runner label. Passed into fallback chain: self-hosted → Blacksmith → ubuntu-latest.'
+        description: 'Preferred runner label. Defaults to the shared OCI self-hosted runner label.'
         required: false
         type: string
         default: ''
@@ -79,7 +79,7 @@ jobs:
     name: Pick runner
     uses: KombiverseLabs/.github/.github/workflows/pick-runner.yml@main
     with:
-      preferred: ${{ inputs.runner || 'blacksmith-4vcpu-ubuntu-2204' }}
+      preferred: ${{ inputs.runner || 'oci-build-labs' }}
     secrets: inherit
 
   build:
