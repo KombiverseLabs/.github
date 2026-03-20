@@ -3,7 +3,7 @@
 # Requires: GITHUB_ORG, GITHUB_RUNNER_TOKEN environment variables
 set -euo pipefail
 
-RUNNER_VERSION="${RUNNER_VERSION:-2.323.0}"
+RUNNER_VERSION="${RUNNER_VERSION:-2.332.0}"
 RUNNER_USER="${RUNNER_USER:-runner}"
 RUNNER_DIR="${RUNNER_DIR:-/opt/actions-runner}"
 RUNNER_NAME="${RUNNER_NAME:-$(hostname)}"

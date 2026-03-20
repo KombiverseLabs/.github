@@ -1,6 +1,7 @@
 #!/bin/bash
-# Bootstrap a lightweight OCI build host for KombiverseLabs
-# Installs Docker, swap, Dagger CLI, and two restart-safe GitHub Actions runners.
+# Bootstrap a lightweight OCI build host for KombiverseLabs.
+# Installs Docker, swap, Dagger CLI, runner health monitoring, and
+# three restart-safe GitHub Actions runners with core/tools overflow labels.
 set -euo pipefail
 
 BOOTSTRAP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,6 +39,7 @@ cat <<'EOF' | sudo tee /etc/docker/daemon.json >/dev/null
   "features": {
     "buildkit": true
   },
+  "live-restore": true,
   "log-driver": "json-file",
   "log-opts": {
     "max-size": "10m",
@@ -46,6 +48,18 @@ cat <<'EOF' | sudo tee /etc/docker/daemon.json >/dev/null
 }
 EOF
 sudo systemctl restart docker
+
+cat <<'EOF' | sudo tee /etc/sysctl.d/99-kombify-build-host.conf >/dev/null
+vm.swappiness=10
+fs.inotify.max_user_watches=1048576
+fs.inotify.max_user_instances=1024
+EOF
+sudo sysctl --system >/dev/null
+
+cat <<'EOF' | sudo tee /etc/profile.d/kombify-build-host.sh >/dev/null
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
+EOF
 
 sudo mkdir -p /opt/actions-runners
 
@@ -64,7 +78,11 @@ install_runner() {
 }
 
 install_runner "oci-build-core-1" "/opt/actions-runners/oci-build-core-1" "$COMMON_LABELS,$CORE_LABELS"
+install_runner "oci-build-core-2" "/opt/actions-runners/oci-build-core-2" "$COMMON_LABELS,$CORE_LABELS"
 install_runner "oci-build-tools-1" "/opt/actions-runners/oci-build-tools-1" "$COMMON_LABELS,$TOOLS_LABELS"
+
+RUNNER_SERVICES="actions.runner.${GITHUB_ORG}.oci-build-core-1.service,actions.runner.${GITHUB_ORG}.oci-build-core-2.service,actions.runner.${GITHUB_ORG}.oci-build-tools-1.service" \
+bash "$BOOTSTRAP_DIR/install-runner-health-monitor.sh"
 
 echo "=== Build host bootstrap complete ==="
 docker --version
@@ -72,4 +90,6 @@ docker compose version
 dagger version
 swapon --show
 systemctl --no-pager --full status actions.runner.${GITHUB_ORG}.oci-build-core-1.service | head -20
+systemctl --no-pager --full status actions.runner.${GITHUB_ORG}.oci-build-core-2.service | head -20
 systemctl --no-pager --full status actions.runner.${GITHUB_ORG}.oci-build-tools-1.service | head -20
+systemctl --no-pager --full status kombify-runner-health.timer | head -20
