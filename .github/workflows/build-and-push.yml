@@ -230,8 +230,27 @@ jobs:
               print('EOF', file=handle)
           PYEOF
 
+      - name: Warm BuildKit image
+        run: |
+          if docker image inspect moby/buildkit:buildx-stable-1 >/dev/null 2>&1; then
+            exit 0
+          fi
+
+          for attempt in 1 2 3 4 5; do
+            if docker pull moby/buildkit:buildx-stable-1 && docker image inspect moby/buildkit:buildx-stable-1 >/dev/null 2>&1; then
+              exit 0
+            fi
+            echo "BuildKit image pull attempt ${attempt} failed; retrying in 10s"
+            sleep 10
+          done
+
+          echo "Failed to cache moby/buildkit:buildx-stable-1 on the runner" >&2
+          exit 1
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: image=moby/buildkit:buildx-stable-1
 
       - name: Log in to GHCR
         if: inputs.push
