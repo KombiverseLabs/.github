@@ -1,0 +1,161 @@
+# Reusable workflow: Aspire integration gate
+# Starts pilot services from GHCR images via Aspire, runs health checks
+name: Aspire Integration Gate
+
+on:
+  workflow_call:
+    inputs:
+      cloud-image-tag:
+        description: 'Cloud GHCR image tag'
+        required: false
+        type: string
+        default: 'latest'
+      admin-backend-image-tag:
+        description: 'Admin Backend GHCR image tag'
+        required: false
+        type: string
+        default: 'latest'
+      admin-frontend-image-tag:
+        description: 'Admin Frontend GHCR image tag'
+        required: false
+        type: string
+        default: 'latest'
+      ai-image-tag:
+        description: 'AI Server GHCR image tag'
+        required: false
+        type: string
+        default: 'latest'
+      runner:
+        description: 'Runner label'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      GH_PAT:
+        required: false
+
+jobs:
+  pick-runner:
+    name: Pick runner
+    uses: KombiverseLabs/.github/.github/workflows/pick-runner.yml@main
+    with:
+      preferred: ${{ inputs.runner || 'oci-build-core' }}
+    secrets: inherit
+
+  aspire-gate:
+    needs: [pick-runner]
+    runs-on: ${{ needs.pick-runner.outputs.runner }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Checkout kombify Core (AppHost)
+        uses: actions/checkout@v4
+        with:
+          repository: KombiverseLabs/kombify-Core
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: kombify-core
+          sparse-checkout: aspire
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Install Aspire workload
+        run: dotnet workload install aspire
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Start Aspire integration-ghcr
+        working-directory: kombify-core/aspire
+        env:
+          KOMBIFY_ASPIRE_PROFILE: integration-ghcr
+          KOMBIFY_CLOUD_IMAGE_TAG: ${{ inputs.cloud-image-tag }}
+          KOMBIFY_ADMIN_BACKEND_IMAGE_TAG: ${{ inputs.admin-backend-image-tag }}
+          KOMBIFY_ADMIN_IMAGE_TAG: ${{ inputs.admin-frontend-image-tag }}
+          KOMBIFY_AI_IMAGE_TAG: ${{ inputs.ai-image-tag }}
+          Parameters__kombifyDbPassword: aspire-gate-test
+        run: |
+          aspire run apphost.cs &
+          ASPIRE_PID=$!
+          echo "ASPIRE_PID=$ASPIRE_PID" >> "$GITHUB_ENV"
+
+          # Wait for services to become healthy
+          echo "Waiting for services to start..."
+          TIMEOUT=120
+          INTERVAL=5
+          ELAPSED=0
+
+          check_health() {
+            local name=$1
+            local url=$2
+            if curl -sf --max-time 3 "$url" > /dev/null 2>&1; then
+              echo "  [PASS] $name"
+              return 0
+            fi
+            return 1
+          }
+
+          ALL_HEALTHY=false
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+            echo "[$ELAPSED/${TIMEOUT}s] Checking health..."
+
+            CLOUD_OK=false
+            ADMIN_BE_OK=false
+            AI_OK=false
+
+            check_health "Cloud" "http://localhost:5290/health" && CLOUD_OK=true
+            check_health "Admin Backend" "http://localhost:8080/health" && ADMIN_BE_OK=true
+            check_health "AI Server" "http://localhost:8090/health" && AI_OK=true
+
+            if $CLOUD_OK && $ADMIN_BE_OK && $AI_OK; then
+              ALL_HEALTHY=true
+              break
+            fi
+          done
+
+          if ! $ALL_HEALTHY; then
+            echo "::error::Not all services became healthy within ${TIMEOUT}s"
+            kill $ASPIRE_PID 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "All services healthy!"
+
+      - name: Run smoke tests
+        run: |
+          echo "=== Smoke Tests ==="
+
+          # Health endpoint contract validation
+          for endpoint in \
+            "http://localhost:5290/health:Cloud" \
+            "http://localhost:8080/health:Admin-Backend" \
+            "http://localhost:8090/health:AI-Server"; do
+            URL="${endpoint%%:*}"
+            NAME="${endpoint##*:}"
+            RESPONSE=$(curl -sf "$URL" 2>/dev/null || echo "FAIL")
+            if echo "$RESPONSE" | grep -q '"status"'; then
+              echo "[PASS] $NAME health contract valid"
+            else
+              echo "::error::[FAIL] $NAME health contract invalid: $RESPONSE"
+              exit 1
+            fi
+          done
+
+          echo "=== All smoke tests passed ==="
+
+      - name: Stop Aspire
+        if: always()
+        run: |
+          kill $ASPIRE_PID 2>/dev/null || true
+          echo "Aspire stopped"
