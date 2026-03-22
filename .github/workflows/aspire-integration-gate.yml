@@ -37,6 +37,7 @@ on:
 jobs:
   pick-runner:
     name: Pick runner
+    timeout-minutes: 20
     uses: KombiverseLabs/.github/.github/workflows/pick-runner.yml@main
     with:
       preferred: ${{ inputs.runner || 'oci-build-core' }}
