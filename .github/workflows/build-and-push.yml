@@ -77,7 +77,7 @@ on:
 jobs:
   pick-runner:
     name: Pick runner
-    timeout-minutes: 20
+    timeout-minutes: 10
     uses: KombiverseLabs/.github/.github/workflows/pick-runner.yml@main
     with:
       preferred: ${{ inputs.runner || 'oci-build-labs' }}
@@ -86,7 +86,7 @@ jobs:
   build:
     needs: [pick-runner]
     runs-on: ${{ needs.pick-runner.outputs.runner }}
-    timeout-minutes: 15
+    timeout-minutes: 10
     permissions:
       contents: read
       packages: write

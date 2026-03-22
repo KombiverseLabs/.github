@@ -15,7 +15,7 @@ jobs:
   setup:
     name: Bootstrap second runner
     runs-on: srv1161760-labs
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - name: Install runner 2
         env:

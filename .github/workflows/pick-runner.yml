@@ -45,7 +45,7 @@ jobs:
   pick:
     name: Select runner
     runs-on: ${{ inputs.preferred || 'oci-build-labs' }}
-    timeout-minutes: 3
+    timeout-minutes: 2
     outputs:
       runner: ${{ steps.select.outputs.runner }}
     steps:
