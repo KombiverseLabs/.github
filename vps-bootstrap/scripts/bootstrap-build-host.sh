@@ -50,6 +50,15 @@ cat <<'EOF' | sudo tee /etc/docker/daemon.json >/dev/null
 EOF
 sudo systemctl restart docker
 
+# ── mise (tool version manager) ──────────────────────────────────
+# mise reads .mise.toml from each repo to install pinned Go/Node/Bun versions.
+# This ensures CI uses the exact same tool versions as local development.
+if ! command -v mise >/dev/null 2>&1; then
+  curl https://mise.run | sh
+  echo 'eval "$(~/.local/bin/mise activate bash)"' >> /etc/profile.d/kombify-build-host.sh
+fi
+
+
 cat <<'EOF' | sudo tee /etc/sysctl.d/99-kombify-build-host.conf >/dev/null
 vm.swappiness=10
 fs.inotify.max_user_watches=1048576
