@@ -65,7 +65,7 @@ on:
         description: "Preferred runner label"
         required: false
         type: string
-        default: "oci-build-core"
+        default: "srv1161760-labs"
       max-retries:
         description: "Verification retry attempts"
         required: false
