@@ -2,25 +2,17 @@
 #
 # HOW IT WORKS
 # ────────────
-# The `pick` job runs ON the preferred runner label itself (`srv1161760-labs` by
-# default). This keeps runner selection on self-hosted capacity and avoids
-# spending hosted minutes unless a caller explicitly opts into a hosted runner.
+# The `pick` job runs ON the preferred runner label itself (`docker-desktop` by
+# default). This targets the two local runners on Marcel's PC.
 #
-# `srv1161760-labs` is the shared VM runner label spanning the OCI build host and
-# the `srv1161760-labs` overflow runners. `oci-build-core` and
-# `oci-build-tools` also exist on the overflow host so queued jobs can spill
-# over without changing workflow YAML.
+# Runner landscape (2026-03-23):
+# - `docker-desktop`    → Marcel's PC (2 runners) — Go builds, Docker builds
+# - `hostinger-runner`  → Hostinger VPS — SvelteKit builds, lightweight CI
+# - `ubuntu-latest`     → GitHub Hosted fallback (uses minutes, avoid)
 #
-# There is still no dynamic hosted fallback chain in this workflow. If every VM
-# runner with the requested label is offline, the job queues until capacity
-# returns.
+# OCI runners have been decommissioned (unreliable Docker connectivity).
 #
 # To explicitly use another runner class, pass `preferred` from the caller.
-# Examples:
-# - `oci-build-core`  for SaaS core repos
-# - `oci-build-tools` for Stack/Sim/tooling repos
-# - `srv1161760-labs` for temporary fallback
-# - `ubuntu-latest` only when hosted capacity is intentionally acceptable
 #
 # NOTE: `kombify-ionos` is the production host — never use it as CI capacity.
 name: Pick Runner
@@ -29,10 +21,10 @@ on:
   workflow_call:
     inputs:
       preferred:
-        description: 'Runner label to use. Defaults to srv1161760-labs.'
+        description: 'Runner label to use. Defaults to docker-desktop.'
         required: false
         type: string
-        default: 'srv1161760-labs'
+        default: 'docker-desktop'
     secrets:
       GH_PAT:
         required: false
@@ -44,7 +36,7 @@ on:
 jobs:
   pick:
     name: Select runner
-    runs-on: ${{ inputs.preferred || 'srv1161760-labs' }}
+    runs-on: ${{ inputs.preferred || 'docker-desktop' }}
     timeout-minutes: 2
     outputs:
       runner: ${{ steps.select.outputs.runner }}
@@ -52,6 +44,6 @@ jobs:
       - name: Output selected runner
         id: select
         run: |
-          RUNNER="${{ inputs.preferred || 'srv1161760-labs' }}"
+          RUNNER="${{ inputs.preferred || 'docker-desktop' }}"
           echo "runner=$RUNNER" >> "$GITHUB_OUTPUT"
           echo "→ Selected: $RUNNER"
