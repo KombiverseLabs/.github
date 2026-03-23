@@ -85,7 +85,7 @@ jobs:
   build:
     needs: [pick-runner]
     runs-on: ${{ needs.pick-runner.outputs.runner }}
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
