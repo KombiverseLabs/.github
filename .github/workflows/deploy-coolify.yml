@@ -779,6 +779,31 @@ jobs:
           echo "❌ Coolify did not report a ready resource state and no HTTP probe is configured"
           exit 1
 
+      - name: Verify deployed image tag
+        if: inputs.resource-type == 'application' && inputs.image-tag != 'latest' && success()
+        id: verify-image
+        env:
+          COOLIFY_TOKEN: ${{ steps.resolved-resource-uuid.outputs.coolify_api_token }}
+          RESOURCE_UUID: ${{ steps.resolved-resource-uuid.outputs.resource_uuid }}
+          EXPECTED_TAG: ${{ inputs.image-tag }}
+        run: |
+          echo "Verifying deployed image tag matches expected: ${EXPECTED_TAG}"
+          RESP=$(curl -sf "https://app.coolify.io/api/v1/applications/${RESOURCE_UUID}" \
+            -H "Authorization: Bearer ${COOLIFY_TOKEN}" \
+            -H "User-Agent: Coolify-Deploy/1.0")
+          DEPLOYED_TAG=$(echo "$RESP" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          print(d.get('docker_registry_image_tag', 'unknown'))
+          " 2>/dev/null || echo "unknown")
+          echo "deployed_tag=${DEPLOYED_TAG}" >> $GITHUB_OUTPUT
+          if [ "$DEPLOYED_TAG" = "$EXPECTED_TAG" ]; then
+            echo "✅ Version verified: deployed tag '${DEPLOYED_TAG}' matches expected '${EXPECTED_TAG}'"
+          else
+            echo "❌ Version mismatch: deployed '${DEPLOYED_TAG}' != expected '${EXPECTED_TAG}'"
+            exit 1
+          fi
+
       - name: Deployment summary
         if: always()
         run: |
@@ -789,6 +814,7 @@ jobs:
           echo "| **Resource** | \`${{ steps.resolved-resource-uuid.outputs.resource_uuid }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Type** | ${{ inputs.resource-type }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Image Tag** | \`${{ inputs.image-tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Deployed Tag** | \`${{ steps.verify-image.outputs.deployed_tag || 'n/a' }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Wait Timed Out** | ${{ steps.wait-for-deploy.outputs.wait_timed_out || 'false' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Last Coolify Status** | \`${{ steps.wait-for-deploy.outputs.last_status || 'unknown' }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Resource Status** | \`${{ steps.wait-for-deploy.outputs.resource_status || 'unknown' }}\` |" >> $GITHUB_STEP_SUMMARY
