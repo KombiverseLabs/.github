@@ -256,8 +256,15 @@ jobs:
             mkdir -p "$CACHE_ROOT"
           fi
           REPO_SLUG="${GITHUB_REPOSITORY//\//-}"
-          CACHE_DIR="${CACHE_ROOT}/${REPO_SLUG}"
-          CACHE_NEW_DIR="${CACHE_DIR}-new"
+          CACHE_KEY="${{ inputs.image-name }}"
+          if [ -z "$CACHE_KEY" ]; then
+            CACHE_KEY="${{ inputs.dockerfile }}"
+          fi
+          CACHE_KEY="${CACHE_KEY//\//-}"
+          CACHE_KEY="${CACHE_KEY//:/-}"
+          CACHE_KEY="${CACHE_KEY// /-}"
+          CACHE_DIR="${CACHE_ROOT}/${REPO_SLUG}/${CACHE_KEY}"
+          CACHE_NEW_DIR="${CACHE_DIR}-${GITHUB_RUN_ID:-manual}-${GITHUB_JOB:-build}-new"
 
           mkdir -p "$CACHE_DIR" "$CACHE_NEW_DIR"
 
@@ -322,9 +329,13 @@ jobs:
           CACHE_DIR="${{ steps.local-cache.outputs.cache_dir }}"
           CACHE_NEW_DIR="${{ steps.local-cache.outputs.cache_new_dir }}"
 
-          if [ -d "$CACHE_NEW_DIR" ] && [ "$(find "$CACHE_NEW_DIR" -mindepth 1 -maxdepth 1 | wc -l)" -gt 0 ]; then
-            rm -rf "$CACHE_DIR"
-            mv "$CACHE_NEW_DIR" "$CACHE_DIR"
+          if [ -d "$CACHE_NEW_DIR" ]; then
+            if [ "$(find "$CACHE_NEW_DIR" -mindepth 1 -maxdepth 1 | wc -l)" -gt 0 ]; then
+              rm -rf "$CACHE_DIR"
+              mv "$CACHE_NEW_DIR" "$CACHE_DIR"
+            else
+              rm -rf "$CACHE_NEW_DIR"
+            fi
           fi
 
       - name: Extract single deploy tag
