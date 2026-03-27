@@ -312,6 +312,11 @@ jobs:
           ENV_ALLOWLIST: ${{ inputs.env-allowlist }}
           PRUNE_UNMANAGED_ENVS: ${{ inputs.prune-unmanaged-envs }}
         run: |
+          if [ -z "${DOPPLER_TOKEN}" ]; then
+            echo "Skipping runtime env sync because no DOPPLER_TOKEN was provided."
+            exit 0
+          fi
+
           # Download secrets from Doppler and upsert each into Coolify one by one.
           # Coolify Cloud SaaS doesn't support /envs/bulk; use POST (create) / DELETE+POST (update).
           if [ ! -f /tmp/app_doppler_secrets.json ]; then
