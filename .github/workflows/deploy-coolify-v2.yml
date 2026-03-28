@@ -86,7 +86,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_INFRA }}
         run: |
           # Resolve Coolify API token
-          COOLIFY_TOKEN=$(doppler secrets get COOLIFY_API_TOKEN --plain --no-read-env)
+          COOLIFY_TOKEN=$(doppler secrets get COOLIFY_API_TOKEN --plain)
           echo "::add-mask::$COOLIFY_TOKEN"
           echo "coolify_token=$COOLIFY_TOKEN" >> "$GITHUB_OUTPUT"
 
@@ -95,7 +95,7 @@ jobs:
             echo "uuid=${{ inputs.resource-uuid }}" >> "$GITHUB_OUTPUT"
             echo "Using direct resource UUID"
           elif [ -n "${{ inputs.resource-uuid-key }}" ]; then
-            UUID=$(doppler secrets get "${{ inputs.resource-uuid-key }}" --plain --no-read-env)
+            UUID=$(doppler secrets get "${{ inputs.resource-uuid-key }}" --plain)
             echo "uuid=$UUID" >> "$GITHUB_OUTPUT"
             echo "Resolved UUID from Doppler key: ${{ inputs.resource-uuid-key }}"
           else
