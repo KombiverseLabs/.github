@@ -154,47 +154,51 @@ jobs:
               -d "$PAYLOAD" \
               "https://app.coolify.io/api/v1/applications/${UUID}" > /dev/null
           else
-            # Service: update image tag in docker_compose_raw
-            COMPOSE=$(curl -sf \
-              -H "Authorization: Bearer $COOLIFY_TOKEN" \
-              "https://app.coolify.io/api/v1/services/${UUID}" | node -e "
-                const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));
-                process.stdout.write(d.docker_compose_raw || d.docker_compose || '');
-              ")
-
-            if [ -z "$COMPOSE" ]; then
-              echo "::warning::No docker compose found for service, skipping image tag update"
+            # Service: image tag is in docker_compose_raw.
+            # For "latest" tag, compose usually already has :latest — just redeploy.
+            # For specific tags (git-sha etc.), update the compose via API.
+            if [ "$TAG" = "latest" ]; then
+              echo "Service with tag 'latest' — skipping compose update, will redeploy"
             else
-              UPDATED=$(echo "$COMPOSE" | node -e "
+              # Fetch current compose, update image tags, PATCH back
+              TMPFILE=$(mktemp)
+              curl -sf \
+                -H "Authorization: Bearer $COOLIFY_TOKEN" \
+                "https://app.coolify.io/api/v1/services/${UUID}" > "$TMPFILE"
+
+              node -e "
                 const fs = require('fs');
-                const compose = fs.readFileSync(0, 'utf8');
+                const d = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+                const compose = d.docker_compose_raw || d.docker_compose || '';
+                if (!compose) { console.log('SKIP'); process.exit(0); }
                 const repo = process.env.REPO;
                 const tag = process.env.TAG;
                 const updated = compose.replace(
-                  /^(\s*image:\s*)([^\s#]+?)(?::([^\s#]+))?(\s*(?:#.*)?)$/gm,
-                  (match, prefix, img, oldTag, suffix) => {
-                    if (img.startsWith('\${')) return match;
-                    if (repo && img.toLowerCase() !== repo.toLowerCase()) return match;
+                  /^(\s*image:\s*)([^\\s#]+?)(?::([^\\s#]+))?(\s*(?:#.*)?)$/gm,
+                  (m, prefix, img, oldTag, suffix) => {
+                    if (img.startsWith('\$')) return m;
+                    if (repo && img.toLowerCase() !== repo.toLowerCase()) return m;
                     return prefix + img + ':' + tag + (suffix || '');
                   }
                 );
-                process.stdout.write(updated);
-              ")
+                if (updated === compose) { console.log('UNCHANGED'); process.exit(0); }
+                const payload = JSON.stringify({ docker_compose_raw: updated });
+                fs.writeFileSync(process.argv[1] + '.patch', payload);
+                console.log('PATCHED');
+              " "$TMPFILE"
 
-              if [ "$COMPOSE" = "$UPDATED" ]; then
-                echo "Compose already uses requested image tag, skipping"
-              else
-                node -e "
-                  const fs = require('fs');
-                  const updated = fs.readFileSync(0, 'utf8');
-                  const payload = JSON.stringify({ docker_compose_raw: updated });
-                  process.stdout.write(payload);
-                " <<< "$UPDATED" | curl -sf -X PATCH \
+              RESULT=$(tail -1 "$TMPFILE" 2>/dev/null || echo "SKIP")
+              if [ -f "${TMPFILE}.patch" ]; then
+                curl -sf -X PATCH \
                   -H "Authorization: Bearer $COOLIFY_TOKEN" \
                   -H "Content-Type: application/json" \
-                  -d @- \
+                  -d @"${TMPFILE}.patch" \
                   "https://app.coolify.io/api/v1/services/${UUID}" > /dev/null
+                echo "Service compose updated"
+              else
+                echo "No compose changes needed"
               fi
+              rm -f "$TMPFILE" "${TMPFILE}.patch"
             fi
           fi
 
