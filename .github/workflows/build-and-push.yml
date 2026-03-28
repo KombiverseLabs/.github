@@ -271,6 +271,10 @@ jobs:
           echo "cache_dir=$CACHE_DIR" >> "$GITHUB_OUTPUT"
           echo "cache_new_dir=$CACHE_NEW_DIR" >> "$GITHUB_OUTPUT"
 
+      - name: Clean stale BuildKit temp data
+        run: |
+          rm -rf /tmp/buildkitd-config* /tmp/buildx-* 2>/dev/null || true
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
         with:
@@ -322,6 +326,8 @@ jobs:
             ${{ steps.doppler-runtime-env.outputs.docker_secret_file }}
           cache-from: type=local,src=${{ steps.local-cache.outputs.cache_dir }}
           cache-to: type=local,dest=${{ steps.local-cache.outputs.cache_new_dir }},mode=max
+          provenance: false
+          sbom: false
 
       - name: Finalize local build cache
         if: always()
