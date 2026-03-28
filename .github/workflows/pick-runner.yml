@@ -2,15 +2,14 @@
 #
 # HOW IT WORKS
 # ────────────
-# The `pick` job runs ON the preferred runner label itself (`docker-desktop` by
-# default). This targets the two local runners on Marcel's PC.
+# The `pick` job runs ON the preferred runner label itself (`kombi` by
+# default). All self-hosted runners share the unified `kombi` label.
 #
-# Runner landscape (2026-03-23):
-# - `docker-desktop`    → Marcel's PC (2 runners) — Go builds, Docker builds
-# - `hostinger-runner`  → Hostinger VPS — SvelteKit builds, lightweight CI
+# Runner landscape (2026-03-28):
+# - `kombi` (primary)   → 4 dedicated runners on kombi-server (kombi-runner-1..4)
+# - `kombi`             → Marcel's PC (2 runners, docker-desktop-1/2)
+# - `kombi`             → srv1161760 (2 runners, srv1161760-labs/labs-2)
 # - `ubuntu-latest`     → GitHub Hosted fallback (uses minutes, avoid)
-#
-# OCI runners have been decommissioned (unreliable Docker connectivity).
 #
 # To explicitly use another runner class, pass `preferred` from the caller.
 #
@@ -21,10 +20,10 @@ on:
   workflow_call:
     inputs:
       preferred:
-        description: 'Runner label to use. Defaults to docker-desktop.'
+        description: 'Runner label to use. Defaults to kombi.'
         required: false
         type: string
-        default: 'docker-desktop'
+        default: 'kombi'
     secrets:
       GH_PAT:
         required: false
@@ -36,7 +35,7 @@ on:
 jobs:
   pick:
     name: Select runner
-    runs-on: ${{ inputs.preferred || 'docker-desktop' }}
+    runs-on: ${{ inputs.preferred || 'kombi' }}
     timeout-minutes: 2
     outputs:
       runner: ${{ steps.select.outputs.runner }}
@@ -44,6 +43,6 @@ jobs:
       - name: Output selected runner
         id: select
         run: |
-          RUNNER="${{ inputs.preferred || 'docker-desktop' }}"
+          RUNNER="${{ inputs.preferred || 'kombi' }}"
           echo "runner=$RUNNER" >> "$GITHUB_OUTPUT"
           echo "→ Selected: $RUNNER"

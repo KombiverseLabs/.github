@@ -65,7 +65,7 @@ on:
         description: "Preferred runner label"
         required: false
         type: string
-        default: "srv1161760-labs"
+        default: "kombi"
       max-retries:
         description: "Verification retry attempts"
         required: false

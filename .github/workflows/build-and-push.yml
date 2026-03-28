@@ -79,7 +79,7 @@ jobs:
     name: Pick runner
     uses: KombiverseLabs/.github/.github/workflows/pick-runner.yml@main
     with:
-      preferred: ${{ inputs.runner || 'docker-desktop' }}
+      preferred: ${{ inputs.runner || 'kombi' }}
     secrets: inherit
 
   build:
