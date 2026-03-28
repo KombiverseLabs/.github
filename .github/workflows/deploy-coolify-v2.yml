@@ -139,19 +139,64 @@ jobs:
           REPO="${{ inputs.image-repository }}"
           TAG="${{ inputs.image-tag }}"
 
-          echo "Updating $RESOURCE_TYPE $UUID to image ${REPO}:${TAG}"
+          echo "Updating $RESOURCE_TYPE $UUID to image ${REPO:+$REPO:}${TAG}"
 
-          PAYLOAD="{\"docker_registry_image_tag\":\"${TAG}\""
-          if [ -n "$REPO" ]; then
-            PAYLOAD="${PAYLOAD},\"docker_registry_image_name\":\"${REPO}\""
+          if [ "$RESOURCE_TYPE" = "application" ]; then
+            PAYLOAD="{\"docker_registry_image_tag\":\"${TAG}\""
+            if [ -n "$REPO" ]; then
+              PAYLOAD="${PAYLOAD},\"docker_registry_image_name\":\"${REPO}\""
+            fi
+            PAYLOAD="${PAYLOAD}}"
+
+            curl -sf -X PATCH \
+              -H "Authorization: Bearer $COOLIFY_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD" \
+              "https://app.coolify.io/api/v1/applications/${UUID}" > /dev/null
+          else
+            # Service: update image tag in docker_compose_raw
+            COMPOSE=$(curl -sf \
+              -H "Authorization: Bearer $COOLIFY_TOKEN" \
+              "https://app.coolify.io/api/v1/services/${UUID}" | node -e "
+                const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+                process.stdout.write(d.docker_compose_raw || d.docker_compose || '');
+              ")
+
+            if [ -z "$COMPOSE" ]; then
+              echo "::warning::No docker compose found for service, skipping image tag update"
+            else
+              UPDATED=$(echo "$COMPOSE" | node -e "
+                const fs = require('fs');
+                const compose = fs.readFileSync(0, 'utf8');
+                const repo = process.env.REPO;
+                const tag = process.env.TAG;
+                const updated = compose.replace(
+                  /^(\s*image:\s*)([^\s#]+?)(?::([^\s#]+))?(\s*(?:#.*)?)$/gm,
+                  (match, prefix, img, oldTag, suffix) => {
+                    if (img.startsWith('\${')) return match;
+                    if (repo && img.toLowerCase() !== repo.toLowerCase()) return match;
+                    return prefix + img + ':' + tag + (suffix || '');
+                  }
+                );
+                process.stdout.write(updated);
+              ")
+
+              if [ "$COMPOSE" = "$UPDATED" ]; then
+                echo "Compose already uses requested image tag, skipping"
+              else
+                node -e "
+                  const fs = require('fs');
+                  const updated = fs.readFileSync(0, 'utf8');
+                  const payload = JSON.stringify({ docker_compose_raw: updated });
+                  process.stdout.write(payload);
+                " <<< "$UPDATED" | curl -sf -X PATCH \
+                  -H "Authorization: Bearer $COOLIFY_TOKEN" \
+                  -H "Content-Type: application/json" \
+                  -d @- \
+                  "https://app.coolify.io/api/v1/services/${UUID}" > /dev/null
+              fi
+            fi
           fi
-          PAYLOAD="${PAYLOAD}}"
-
-          curl -sf -X PATCH \
-            -H "Authorization: Bearer $COOLIFY_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "https://app.coolify.io/api/v1/${RESOURCE_TYPE}s/${UUID}" > /dev/null
 
           echo "Image tag updated"
 
