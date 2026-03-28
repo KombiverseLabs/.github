@@ -3,7 +3,6 @@
 # HOW IT WORKS
 # ────────────
 # The `pick` job runs ON the preferred runner label itself (`kombi` by
-<<<<<<< HEAD
 # default). All self-hosted runners share the unified `kombi` label.
 #
 # Runner landscape (2026-03-28):
