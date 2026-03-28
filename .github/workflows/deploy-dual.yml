@@ -1,0 +1,88 @@
+name: Deploy Dual (Space Canary → IO Production)
+# Standard deployment pattern: Space first (canary), then IO (production).
+# If Space health check fails, IO deploy is skipped.
+# Both servers are always deployed in the same pipeline run.
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: "Service name for logging"
+        required: true
+        type: string
+      resource-uuid-key:
+        description: "Doppler key in prd_infra for Coolify UUID (same key name used in both io and space)"
+        required: true
+        type: string
+      resource-type:
+        description: "Coolify resource type: application or service"
+        required: false
+        type: string
+        default: "application"
+      image-tag:
+        description: "Image tag to deploy"
+        required: true
+        type: string
+      image-tag-space:
+        description: "Image tag for Space (if different from IO, e.g. space-prefixed). Defaults to image-tag."
+        required: false
+        type: string
+      image-repository:
+        description: "Full GHCR image repository"
+        required: false
+        type: string
+      health-check-url-space:
+        description: "Health check URL for *.kombify.space"
+        required: false
+        type: string
+      health-check-url-io:
+        description: "Health check URL for *.kombify.io"
+        required: false
+        type: string
+      force:
+        description: "Force redeploy"
+        required: false
+        type: boolean
+        default: false
+      runner:
+        description: "Runner label"
+        required: false
+        type: string
+        default: "docker-desktop"
+    secrets:
+      DOPPLER_TOKEN_INFRA_SPACE:
+        description: "Doppler service token for kombify-space/prd_infra"
+        required: true
+      DOPPLER_TOKEN_INFRA_IO:
+        description: "Doppler service token for kombify-io/prd_infra"
+        required: true
+
+jobs:
+  deploy-space:
+    name: "${{ inputs.service-name }} → Space (canary)"
+    uses: KombiverseLabs/.github/.github/workflows/deploy-coolify-v2.yml@main
+    with:
+      resource-uuid-key: ${{ inputs.resource-uuid-key }}
+      resource-type: ${{ inputs.resource-type }}
+      image-tag: ${{ inputs.image-tag-space || inputs.image-tag }}
+      image-repository: ${{ inputs.image-repository }}
+      health-check-url: ${{ inputs.health-check-url-space }}
+      force: ${{ inputs.force }}
+      runner: ${{ inputs.runner }}
+    secrets:
+      DOPPLER_TOKEN_INFRA: ${{ secrets.DOPPLER_TOKEN_INFRA_SPACE }}
+
+  deploy-io:
+    name: "${{ inputs.service-name }} → IO (production)"
+    needs: [deploy-space]
+    uses: KombiverseLabs/.github/.github/workflows/deploy-coolify-v2.yml@main
+    with:
+      resource-uuid-key: ${{ inputs.resource-uuid-key }}
+      resource-type: ${{ inputs.resource-type }}
+      image-tag: ${{ inputs.image-tag }}
+      image-repository: ${{ inputs.image-repository }}
+      health-check-url: ${{ inputs.health-check-url-io }}
+      force: ${{ inputs.force }}
+      runner: ${{ inputs.runner }}
+    secrets:
+      DOPPLER_TOKEN_INFRA: ${{ secrets.DOPPLER_TOKEN_INFRA_IO }}

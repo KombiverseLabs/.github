@@ -1,0 +1,204 @@
+name: Deploy via Coolify (v2 — No Env Sync)
+# Simplified deployment: update image tag + trigger Coolify restart.
+# All secrets are baked into images at build time via Doppler.
+# Coolify manages only container lifecycle — zero env vars.
+
+on:
+  workflow_call:
+    inputs:
+      resource-uuid:
+        description: "Coolify resource UUID (direct value)"
+        required: false
+        type: string
+      resource-uuid-key:
+        description: "Doppler key name in prd_infra that holds the resource UUID"
+        required: false
+        type: string
+      resource-type:
+        description: "Coolify resource type: application or service"
+        required: false
+        type: string
+        default: "application"
+      image-tag:
+        description: "Docker image tag to deploy"
+        required: false
+        type: string
+        default: "latest"
+      image-repository:
+        description: "Full image repository (e.g. ghcr.io/kombiverselabs/kombify-blog)"
+        required: false
+        type: string
+      health-check-url:
+        description: "URL to probe after deployment"
+        required: false
+        type: string
+      health-check-retries:
+        description: "Number of health check retries"
+        required: false
+        type: number
+        default: 6
+      health-check-interval:
+        description: "Seconds between health check retries"
+        required: false
+        type: number
+        default: 10
+      force:
+        description: "Force redeploy even if same tag"
+        required: false
+        type: boolean
+        default: false
+      runner:
+        description: "Runner label"
+        required: false
+        type: string
+        default: "docker-desktop"
+    secrets:
+      DOPPLER_TOKEN_INFRA:
+        description: "Doppler service token for prd_infra (resolves UUIDs + Coolify API token)"
+        required: true
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 15
+    steps:
+      - name: Install Doppler CLI
+        shell: bash
+        run: |
+          if command -v doppler >/dev/null 2>&1; then exit 0; fi
+          sudo mkdir -p /usr/share/keyrings
+          if [ ! -f /usr/share/keyrings/doppler-archive-keyring.gpg ]; then
+            curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
+              'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' \
+              | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
+          fi
+          if [ ! -f /etc/apt/sources.list.d/doppler-cli.list ]; then
+            echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] https://packages.doppler.com/public/cli/deb/debian any-version main" \
+              | sudo tee /etc/apt/sources.list.d/doppler-cli.list
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y doppler
+
+      - name: Resolve Coolify credentials
+        id: resolve
+        shell: bash
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_INFRA }}
+        run: |
+          # Resolve Coolify API token
+          COOLIFY_TOKEN=$(doppler secrets get COOLIFY_API_TOKEN --plain --no-read-env)
+          echo "::add-mask::$COOLIFY_TOKEN"
+          echo "coolify_token=$COOLIFY_TOKEN" >> "$GITHUB_OUTPUT"
+
+          # Resolve resource UUID
+          if [ -n "${{ inputs.resource-uuid }}" ]; then
+            echo "uuid=${{ inputs.resource-uuid }}" >> "$GITHUB_OUTPUT"
+            echo "Using direct resource UUID"
+          elif [ -n "${{ inputs.resource-uuid-key }}" ]; then
+            UUID=$(doppler secrets get "${{ inputs.resource-uuid-key }}" --plain --no-read-env)
+            echo "uuid=$UUID" >> "$GITHUB_OUTPUT"
+            echo "Resolved UUID from Doppler key: ${{ inputs.resource-uuid-key }}"
+          else
+            echo "::error::Either resource-uuid or resource-uuid-key must be provided"
+            exit 1
+          fi
+
+      - name: Validate Coolify resource
+        shell: bash
+        env:
+          COOLIFY_TOKEN: ${{ steps.resolve.outputs.coolify_token }}
+        run: |
+          RESOURCE_TYPE="${{ inputs.resource-type }}"
+          UUID="${{ steps.resolve.outputs.uuid }}"
+          API_URL="https://app.coolify.io/api/v1/${RESOURCE_TYPE}s/${UUID}"
+
+          echo "Checking resource: $API_URL"
+          RESPONSE=$(curl -sf -H "Authorization: Bearer $COOLIFY_TOKEN" "$API_URL" 2>/dev/null) || {
+            echo "::error::Failed to reach Coolify API or resource not found (UUID: $UUID)"
+            exit 1
+          }
+
+          STATUS=$(echo "$RESPONSE" | node -e "
+            const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+            console.log(d.status || 'unknown');
+          ")
+          echo "Resource status: $STATUS"
+
+          if [[ "$STATUS" == exited* ]]; then
+            echo "::error::Resource is in exited state. Fix manually before deploying."
+            exit 1
+          fi
+
+      - name: Update image tag
+        shell: bash
+        env:
+          COOLIFY_TOKEN: ${{ steps.resolve.outputs.coolify_token }}
+        run: |
+          UUID="${{ steps.resolve.outputs.uuid }}"
+          RESOURCE_TYPE="${{ inputs.resource-type }}"
+          REPO="${{ inputs.image-repository }}"
+          TAG="${{ inputs.image-tag }}"
+
+          echo "Updating $RESOURCE_TYPE $UUID to image ${REPO}:${TAG}"
+
+          PAYLOAD="{\"docker_registry_image_tag\":\"${TAG}\""
+          if [ -n "$REPO" ]; then
+            PAYLOAD="${PAYLOAD},\"docker_registry_image_name\":\"${REPO}\""
+          fi
+          PAYLOAD="${PAYLOAD}}"
+
+          curl -sf -X PATCH \
+            -H "Authorization: Bearer $COOLIFY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "https://app.coolify.io/api/v1/${RESOURCE_TYPE}s/${UUID}" > /dev/null
+
+          echo "Image tag updated"
+
+      - name: Trigger deployment
+        shell: bash
+        env:
+          COOLIFY_TOKEN: ${{ steps.resolve.outputs.coolify_token }}
+        run: |
+          UUID="${{ steps.resolve.outputs.uuid }}"
+          FORCE="${{ inputs.force }}"
+
+          echo "Triggering deployment (force=$FORCE)..."
+          curl -sf -X POST \
+            -H "Authorization: Bearer $COOLIFY_TOKEN" \
+            "https://app.coolify.io/api/v1/deploy?uuid=${UUID}&force=${FORCE}" > /dev/null
+
+          echo "Deployment triggered"
+
+      - name: Wait for container startup
+        shell: bash
+        run: |
+          echo "Waiting 30s for container to start..."
+          sleep 30
+
+      - name: Health check
+        if: inputs.health-check-url != ''
+        shell: bash
+        run: |
+          URL="${{ inputs.health-check-url }}"
+          RETRIES=${{ inputs.health-check-retries }}
+          INTERVAL=${{ inputs.health-check-interval }}
+
+          echo "Health checking: $URL (max ${RETRIES} attempts, ${INTERVAL}s interval)"
+
+          for i in $(seq 1 "$RETRIES"); do
+            HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 10 "$URL" 2>/dev/null || echo "000")
+            echo "  Attempt $i/$RETRIES: HTTP $HTTP_CODE"
+
+            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 400 ]; then
+              echo "Health check passed"
+              exit 0
+            fi
+
+            if [ "$i" -lt "$RETRIES" ]; then
+              sleep "$INTERVAL"
+            fi
+          done
+
+          echo "::error::Health check failed after $RETRIES attempts at $URL"
+          exit 1
