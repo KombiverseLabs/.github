@@ -51,7 +51,7 @@ on:
         description: "Runner label"
         required: false
         type: string
-        default: "docker-desktop"
+        default: "kombi"
     secrets:
       DOPPLER_TOKEN_INFRA:
         description: "Doppler service token for prd_infra (resolves UUIDs + Coolify API token)"

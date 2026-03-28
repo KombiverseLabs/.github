@@ -48,7 +48,7 @@ on:
         description: "Runner label"
         required: false
         type: string
-        default: "docker-desktop"
+        default: "kombi"
     secrets:
       DOPPLER_TOKEN_INFRA_SPACE:
         description: "Doppler service token for kombify-space/prd_infra"
