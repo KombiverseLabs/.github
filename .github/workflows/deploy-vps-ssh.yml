@@ -132,6 +132,10 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      - name: DEPRECATED -- VPS SSH deploy is being phased out
+        run: |
+          echo "::warning::deploy-vps-ssh.yml is DEPRECATED. All .space deployments must migrate to Coolify by 2026-04-30. See https://github.com/KombiverseLabs/.github/issues for migration tracking."
+
       - name: Install Doppler CLI
         run: |
           if command -v doppler >/dev/null 2>&1; then
