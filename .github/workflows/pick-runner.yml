@@ -5,10 +5,9 @@
 # The `pick` job runs ON the preferred runner label itself (`kombi` by
 # default). All self-hosted runners share the unified `kombi` label.
 #
-# Runner landscape (2026-03-28):
+# Runner landscape (2026-03-31):
 # - `kombi` (primary)   → 4 dedicated runners on kombi-server (kombi-runner-1..4)
 # - `kombi`             → Marcel's PC (2 runners, docker-desktop-1/2)
-# - `kombi`             → srv1161760 (2 runners, srv1161760-labs/labs-2)
 # - `ubuntu-latest`     → GitHub Hosted fallback (uses minutes, avoid)
 #
 # To explicitly use another runner class, pass `preferred` from the caller.
