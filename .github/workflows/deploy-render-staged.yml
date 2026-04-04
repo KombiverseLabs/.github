@@ -1,0 +1,300 @@
+name: Deploy via Render (Staged)
+# Render deployment: resolve service ID from Doppler, trigger image deploy via API,
+# poll until live, health check. Supports optional staging → production pipeline.
+#
+# Required Doppler config (behind DOPPLER_TOKEN_RENDER):
+#   RENDER_API_KEY           — Render API key
+#   <service-id-key>         — Render service ID per service (e.g. RENDER_CLOUD_SERVICE_ID)
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: "Service name for logging"
+        required: true
+        type: string
+      service-id-key-production:
+        description: "Doppler key holding the Render service ID for production"
+        required: true
+        type: string
+      service-id-key-staging:
+        description: "Doppler key holding the Render service ID for staging"
+        required: false
+        type: string
+      image-tag:
+        description: "Docker image tag to deploy"
+        required: false
+        type: string
+        default: "latest"
+      image-repository:
+        description: "Full GHCR image repository"
+        required: false
+        type: string
+      health-check-url-production:
+        description: "URL to probe after production deployment"
+        required: false
+        type: string
+      health-check-url-staging:
+        description: "URL to probe after staging deployment"
+        required: false
+        type: string
+      skip-staging:
+        description: "Skip staging deployment"
+        required: false
+        type: boolean
+        default: false
+      health-check-retries:
+        description: "Number of health check retries"
+        required: false
+        type: number
+        default: 12
+      health-check-interval:
+        description: "Seconds between health check retries"
+        required: false
+        type: number
+        default: 10
+      force:
+        description: "Force redeploy (clear build cache)"
+        required: false
+        type: boolean
+        default: false
+      runner:
+        description: "Runner label"
+        required: false
+        type: string
+        default: "blacksmith-4vcpu-ubuntu-2204"
+    secrets:
+      DOPPLER_TOKEN_RENDER:
+        description: "Doppler service token for config holding RENDER_API_KEY + service IDs"
+        required: true
+
+jobs:
+  deploy-staging:
+    name: "${{ inputs.service-name }} → Staging"
+    if: inputs.skip-staging != true && inputs.service-id-key-staging != ''
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 15
+    outputs:
+      status: ${{ steps.wait.outputs.status }}
+    steps:
+      - name: Install Doppler CLI
+        shell: bash
+        run: |
+          if command -v doppler >/dev/null 2>&1; then exit 0; fi
+          sudo mkdir -p /usr/share/keyrings
+          if [ ! -f /usr/share/keyrings/doppler-archive-keyring.gpg ]; then
+            curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
+              'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' \
+              | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
+          fi
+          if [ ! -f /etc/apt/sources.list.d/doppler-cli.list ]; then
+            echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] https://packages.doppler.com/public/cli/deb/debian any-version main" \
+              | sudo tee /etc/apt/sources.list.d/doppler-cli.list
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y doppler
+
+      - name: Resolve Render credentials
+        id: resolve
+        shell: bash
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_RENDER }}
+        run: |
+          RENDER_API_KEY=$(doppler secrets get RENDER_API_KEY --plain)
+          echo "::add-mask::$RENDER_API_KEY"
+          echo "api_key=$RENDER_API_KEY" >> "$GITHUB_OUTPUT"
+
+          SERVICE_ID=$(doppler secrets get "${{ inputs.service-id-key-staging }}" --plain)
+          echo "service_id=$SERVICE_ID" >> "$GITHUB_OUTPUT"
+          echo "Resolved staging service ID for ${{ inputs.service-name }}: $SERVICE_ID"
+
+      - name: Trigger deploy
+        id: deploy
+        shell: bash
+        run: |
+          SERVICE_ID="${{ steps.resolve.outputs.service_id }}"
+          CLEAR_CACHE="${{ inputs.force && 'clear' || 'do_not_clear' }}"
+
+          RESPONSE=$(curl -sf -X POST \
+            -H "Authorization: Bearer ${{ steps.resolve.outputs.api_key }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"clearCache\": \"${CLEAR_CACHE}\"}" \
+            "https://api.render.com/v1/services/${SERVICE_ID}/deploys")
+
+          DEPLOY_ID=$(echo "$RESPONSE" | jq -r '.id')
+          echo "deploy_id=$DEPLOY_ID" >> "$GITHUB_OUTPUT"
+          echo "Deploy triggered: $DEPLOY_ID"
+
+      - name: Wait for deploy
+        id: wait
+        shell: bash
+        run: |
+          SERVICE_ID="${{ steps.resolve.outputs.service_id }}"
+          DEPLOY_ID="${{ steps.deploy.outputs.deploy_id }}"
+          MAX_ATTEMPTS=60
+
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            RESPONSE=$(curl -sf \
+              -H "Authorization: Bearer ${{ steps.resolve.outputs.api_key }}" \
+              "https://api.render.com/v1/services/${SERVICE_ID}/deploys/${DEPLOY_ID}")
+
+            STATUS=$(echo "$RESPONSE" | jq -r '.status')
+            echo "  Poll $i/$MAX_ATTEMPTS: $STATUS"
+
+            case "$STATUS" in
+              live)
+                echo "status=live" >> "$GITHUB_OUTPUT"
+                echo "Deploy is live"
+                exit 0
+                ;;
+              build_failed|update_failed|canceled|deactivated)
+                echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+                echo "::error::Deploy failed with status: $STATUS"
+                exit 1
+                ;;
+            esac
+
+            sleep 10
+          done
+
+          echo "status=timeout" >> "$GITHUB_OUTPUT"
+          echo "::error::Deploy timed out after $((MAX_ATTEMPTS * 10))s"
+          exit 1
+
+      - name: Health check
+        if: inputs.health-check-url-staging != ''
+        shell: bash
+        run: |
+          URL="${{ inputs.health-check-url-staging }}"
+          RETRIES=${{ inputs.health-check-retries }}
+          INTERVAL=${{ inputs.health-check-interval }}
+
+          echo "Health checking: $URL (max $RETRIES attempts, ${INTERVAL}s interval)"
+          for i in $(seq 1 "$RETRIES"); do
+            HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 10 "$URL" 2>/dev/null || echo "000")
+            echo "  Attempt $i/$RETRIES: HTTP $HTTP_CODE"
+
+            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 400 ]; then
+              echo "Health check passed"
+              exit 0
+            fi
+
+            if [ "$i" -lt "$RETRIES" ]; then
+              sleep "$INTERVAL"
+            fi
+          done
+
+          echo "::error::Health check failed after $RETRIES attempts at $URL"
+          exit 1
+
+  deploy-production:
+    name: "${{ inputs.service-name }} → Production"
+    needs: [deploy-staging]
+    if: always() && (needs.deploy-staging.result == 'success' || needs.deploy-staging.result == 'skipped')
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 15
+    steps:
+      - name: Install Doppler CLI
+        shell: bash
+        run: |
+          if command -v doppler >/dev/null 2>&1; then exit 0; fi
+          sudo mkdir -p /usr/share/keyrings
+          if [ ! -f /usr/share/keyrings/doppler-archive-keyring.gpg ]; then
+            curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
+              'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' \
+              | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
+          fi
+          if [ ! -f /etc/apt/sources.list.d/doppler-cli.list ]; then
+            echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] https://packages.doppler.com/public/cli/deb/debian any-version main" \
+              | sudo tee /etc/apt/sources.list.d/doppler-cli.list
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y doppler
+
+      - name: Resolve Render credentials
+        id: resolve
+        shell: bash
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_RENDER }}
+        run: |
+          RENDER_API_KEY=$(doppler secrets get RENDER_API_KEY --plain)
+          echo "::add-mask::$RENDER_API_KEY"
+          echo "api_key=$RENDER_API_KEY" >> "$GITHUB_OUTPUT"
+
+          SERVICE_ID=$(doppler secrets get "${{ inputs.service-id-key-production }}" --plain)
+          echo "service_id=$SERVICE_ID" >> "$GITHUB_OUTPUT"
+          echo "Resolved production service ID for ${{ inputs.service-name }}: $SERVICE_ID"
+
+      - name: Trigger deploy
+        id: deploy
+        shell: bash
+        run: |
+          SERVICE_ID="${{ steps.resolve.outputs.service_id }}"
+          CLEAR_CACHE="${{ inputs.force && 'clear' || 'do_not_clear' }}"
+
+          RESPONSE=$(curl -sf -X POST \
+            -H "Authorization: Bearer ${{ steps.resolve.outputs.api_key }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"clearCache\": \"${CLEAR_CACHE}\"}" \
+            "https://api.render.com/v1/services/${SERVICE_ID}/deploys")
+
+          DEPLOY_ID=$(echo "$RESPONSE" | jq -r '.id')
+          echo "deploy_id=$DEPLOY_ID" >> "$GITHUB_OUTPUT"
+          echo "Deploy triggered: $DEPLOY_ID"
+
+      - name: Wait for deploy
+        id: wait
+        shell: bash
+        run: |
+          SERVICE_ID="${{ steps.resolve.outputs.service_id }}"
+          DEPLOY_ID="${{ steps.deploy.outputs.deploy_id }}"
+          MAX_ATTEMPTS=60
+
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            RESPONSE=$(curl -sf \
+              -H "Authorization: Bearer ${{ steps.resolve.outputs.api_key }}" \
+              "https://api.render.com/v1/services/${SERVICE_ID}/deploys/${DEPLOY_ID}")
+
+            STATUS=$(echo "$RESPONSE" | jq -r '.status')
+            echo "  Poll $i/$MAX_ATTEMPTS: $STATUS"
+
+            case "$STATUS" in
+              live)
+                echo "Deploy is live"
+                exit 0
+                ;;
+              build_failed|update_failed|canceled|deactivated)
+                echo "::error::Deploy failed with status: $STATUS"
+                exit 1
+                ;;
+            esac
+
+            sleep 10
+          done
+
+          echo "::error::Deploy timed out after $((MAX_ATTEMPTS * 10))s"
+          exit 1
+
+      - name: Health check
+        if: inputs.health-check-url-production != ''
+        shell: bash
+        run: |
+          URL="${{ inputs.health-check-url-production }}"
+          RETRIES=${{ inputs.health-check-retries }}
+          INTERVAL=${{ inputs.health-check-interval }}
+
+          echo "Health checking: $URL (max $RETRIES attempts, ${INTERVAL}s interval)"
+          for i in $(seq 1 "$RETRIES"); do
+            HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 10 "$URL" 2>/dev/null || echo "000")
+            echo "  Attempt $i/$RETRIES: HTTP $HTTP_CODE"
+
+            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 400 ]; then
+              echo "Health check passed"
+              exit 0
+            fi
+
+            if [ "$i" -lt "$RETRIES" ]; then
+              sleep "$INTERVAL"
+            fi
+          done
+
+          echo "::error::Health check failed after $RETRIES attempts at $URL"
+          exit 1
