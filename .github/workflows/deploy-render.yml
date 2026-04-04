@@ -1,0 +1,159 @@
+name: Deploy via Render CLI
+# Deploys a pre-built GHCR image to a Render service using the Render CLI.
+# The CLI --wait flag blocks until the deploy reaches 'live' status.
+# Service ID and API key are resolved from Doppler prd_render.
+# Replaces deploy-coolify-v2.yml.
+
+on:
+  workflow_call:
+    inputs:
+      service-id:
+        description: "Render service ID (direct value, e.g. srv-abc123)"
+        required: false
+        type: string
+      service-id-key:
+        description: "Doppler key name in prd_render that holds the Render service ID"
+        required: false
+        type: string
+      image-tag:
+        description: "Docker image tag to deploy"
+        required: false
+        type: string
+        default: "latest"
+      image-repository:
+        description: "Full image repository (e.g. ghcr.io/kombiverselabs/kombify-blog)"
+        required: true
+        type: string
+      health-check-url:
+        description: "URL to probe after deployment (optional)"
+        required: false
+        type: string
+      health-check-retries:
+        description: "Number of health check retries"
+        required: false
+        type: number
+        default: 12
+      health-check-interval:
+        description: "Seconds between health check retries"
+        required: false
+        type: number
+        default: 10
+      runner:
+        description: "Runner label"
+        required: false
+        type: string
+        default: "blacksmith-4vcpu-ubuntu-2204"
+    secrets:
+      DOPPLER_TOKEN:
+        description: "Doppler token with access to kombify-io/prd_render (holds Render API key + service IDs)"
+        required: true
+
+# Kritischer Pfad: deploy (15) = 15 min max
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 15
+    steps:
+      - name: Install Doppler CLI
+        shell: bash
+        run: |
+          if command -v doppler >/dev/null 2>&1; then exit 0; fi
+          sudo mkdir -p /usr/share/keyrings
+          if [ ! -f /usr/share/keyrings/doppler-archive-keyring.gpg ]; then
+            curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
+              'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' \
+              | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
+          fi
+          if [ ! -f /etc/apt/sources.list.d/doppler-cli.list ]; then
+            echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] https://packages.doppler.com/public/cli/deb/debian any-version main" \
+              | sudo tee /etc/apt/sources.list.d/doppler-cli.list
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y doppler
+
+      - name: Install Render CLI
+        shell: bash
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/render-oss/cli/refs/heads/main/bin/install.sh | sh
+
+      - name: Resolve Render credentials from Doppler
+        id: resolve
+        shell: bash
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          RENDER_API_KEY=$(doppler secrets get RENDER_API_KEY --plain --project kombify-io --config prd_render --no-read-env)
+          echo "::add-mask::$RENDER_API_KEY"
+          echo "api_key=$RENDER_API_KEY" >> "$GITHUB_OUTPUT"
+
+          if [ -n "${{ inputs.service-id }}" ]; then
+            echo "service_id=${{ inputs.service-id }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ inputs.service-id-key }}" ]; then
+            SERVICE_ID=$(doppler secrets get "${{ inputs.service-id-key }}" --plain --project kombify-io --config prd_render --no-read-env)
+            echo "service_id=$SERVICE_ID" >> "$GITHUB_OUTPUT"
+            echo "Resolved service ID from Doppler key: ${{ inputs.service-id-key }}"
+          else
+            echo "::error::Either service-id or service-id-key must be provided"
+            exit 1
+          fi
+
+      - name: Validate service is not suspended
+        shell: bash
+        env:
+          RENDER_API_KEY: ${{ steps.resolve.outputs.api_key }}
+        run: |
+          SERVICE_ID="${{ steps.resolve.outputs.service_id }}"
+          RESPONSE=$(curl -sf \
+            -H "Authorization: Bearer $RENDER_API_KEY" \
+            -H "Accept: application/json" \
+            "https://api.render.com/v1/services/${SERVICE_ID}") || {
+            echo "::error::Failed to reach Render API or service not found (ID: $SERVICE_ID)"
+            exit 1
+          }
+          STATUS=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('suspended','unknown'))" 2>/dev/null || echo "unknown")
+          if [ "$STATUS" = "suspended" ]; then
+            echo "::error::Service is suspended. Resume it in the Render dashboard before deploying."
+            exit 1
+          fi
+          echo "Service OK (suspended=$STATUS)"
+
+      - name: Deploy image via Render CLI
+        shell: bash
+        env:
+          RENDER_API_KEY: ${{ steps.resolve.outputs.api_key }}
+          CI: "true"
+        run: |
+          SERVICE_ID="${{ steps.resolve.outputs.service_id }}"
+          IMAGE_URL="${{ inputs.image-repository }}:${{ inputs.image-tag }}"
+
+          echo "Deploying ${IMAGE_URL} to service ${SERVICE_ID}"
+
+          render deploys create "${SERVICE_ID}" \
+            --image "${IMAGE_URL}" \
+            --wait \
+            --output json \
+            --confirm
+
+      - name: Health check
+        if: inputs.health-check-url != ''
+        shell: bash
+        run: |
+          URL="${{ inputs.health-check-url }}"
+          RETRIES=${{ inputs.health-check-retries }}
+          INTERVAL=${{ inputs.health-check-interval }}
+
+          echo "Health checking: $URL (max ${RETRIES} attempts, ${INTERVAL}s interval)"
+
+          for i in $(seq 1 "$RETRIES"); do
+            HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 10 "$URL" 2>/dev/null || echo "000")
+            echo "  Attempt $i/$RETRIES: HTTP $HTTP_CODE"
+            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 400 ]; then
+              echo "Health check passed"
+              exit 0
+            fi
+            [ "$i" -lt "$RETRIES" ] && sleep "$INTERVAL"
+          done
+
+          echo "::error::Health check failed after $RETRIES attempts at $URL"
+          exit 1

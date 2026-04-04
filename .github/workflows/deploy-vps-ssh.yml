@@ -1,0 +1,133 @@
+name: Deploy via SSH (VPS Docker Compose)
+# SSH-based deployment to a VPS running Docker Compose.
+# SSH credentials (host, user, private key) are fetched from Doppler.
+# Supports both production (kombify-io/prd_infra) and dev (kombify-ionos-dev/dev) VPS.
+# Used for services that cannot run on Render (e.g. kombify-Sim: requires Docker socket + privileged mode).
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: "Service name for logging"
+        required: true
+        type: string
+      compose-service:
+        description: "Docker Compose service name to pull + restart"
+        required: true
+        type: string
+      compose-dir:
+        description: "Directory on VPS containing docker-compose.yml"
+        required: false
+        type: string
+        default: "/opt/kombify-sim"
+      health-check-url:
+        description: "URL to probe after deployment"
+        required: false
+        type: string
+      health-check-retries:
+        description: "Number of health check retries"
+        required: false
+        type: number
+        default: 12
+      health-check-interval:
+        description: "Seconds between health check retries"
+        required: false
+        type: number
+        default: 10
+      runner:
+        description: "Runner label"
+        required: false
+        type: string
+        default: "blacksmith-4vcpu-ubuntu-2204"
+      doppler-project:
+        description: "Doppler project containing VPS SSH credentials"
+        required: false
+        type: string
+        default: "kombify-io"
+      doppler-config:
+        description: "Doppler config containing VPS SSH credentials"
+        required: false
+        type: string
+        default: "prd_infra"
+    secrets:
+      DOPPLER_TOKEN:
+        description: "Doppler token with access to VPS SSH credentials"
+        required: true
+
+# Kritischer Pfad: deploy (10) = 10 min max
+
+jobs:
+  deploy:
+    name: "${{ inputs.service-name }} → VPS"
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
+    steps:
+      - name: Install Doppler CLI
+        shell: bash
+        run: |
+          if command -v doppler >/dev/null 2>&1; then exit 0; fi
+          sudo mkdir -p /usr/share/keyrings
+          if [ ! -f /usr/share/keyrings/doppler-archive-keyring.gpg ]; then
+            curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
+              'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' \
+              | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
+          fi
+          if [ ! -f /etc/apt/sources.list.d/doppler-cli.list ]; then
+            echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] https://packages.doppler.com/public/cli/deb/debian any-version main" \
+              | sudo tee /etc/apt/sources.list.d/doppler-cli.list
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y doppler
+
+      - name: Deploy via SSH
+        shell: bash
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          VPS_HOST=$(doppler secrets get IONOS_VPS_HOST --plain --project ${{ inputs.doppler-project }} --config ${{ inputs.doppler-config }} --no-read-env)
+          VPS_USER=$(doppler secrets get IONOS_VPS_USER --plain --project ${{ inputs.doppler-project }} --config ${{ inputs.doppler-config }} --no-read-env)
+          SSH_KEY=$(doppler secrets get IONOS_SSH_PRIVATE_KEY --plain --project ${{ inputs.doppler-project }} --config ${{ inputs.doppler-config }} --no-read-env)
+          echo "::add-mask::$SSH_KEY"
+
+          SSH_KEY_FILE=$(mktemp)
+          chmod 600 "$SSH_KEY_FILE"
+          printf '%s\n' "$SSH_KEY" > "$SSH_KEY_FILE"
+          trap 'rm -f "$SSH_KEY_FILE"' EXIT
+
+          COMPOSE_DIR="${{ inputs.compose-dir }}"
+          COMPOSE_SVC="${{ inputs.compose-service }}"
+
+          echo "Deploying $COMPOSE_SVC in $COMPOSE_DIR on ${VPS_USER}@${VPS_HOST}"
+
+          ssh -i "$SSH_KEY_FILE" \
+            -o StrictHostKeyChecking=no \
+            -o BatchMode=yes \
+            -o ConnectTimeout=10 \
+            "${VPS_USER}@${VPS_HOST}" \
+            "cd ${COMPOSE_DIR} && \
+             docker compose pull ${COMPOSE_SVC} && \
+             docker compose up -d --no-deps --remove-orphans ${COMPOSE_SVC}"
+
+      - name: Health check
+        if: inputs.health-check-url != ''
+        shell: bash
+        run: |
+          URL="${{ inputs.health-check-url }}"
+          RETRIES=${{ inputs.health-check-retries }}
+          INTERVAL=${{ inputs.health-check-interval }}
+
+          echo "Health checking: $URL (max ${RETRIES} attempts, ${INTERVAL}s interval)"
+
+          for i in $(seq 1 "$RETRIES"); do
+            HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 10 "$URL" 2>/dev/null || echo "000")
+            echo "  Attempt $i/$RETRIES: HTTP $HTTP_CODE"
+            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 400 ]; then
+              echo "Health check passed"
+              exit 0
+            fi
+            [ "$i" -lt "$RETRIES" ] && sleep "$INTERVAL"
+          done
+
+          echo "::error::Health check failed after $RETRIES attempts at $URL"
+          exit 1

@@ -7,38 +7,51 @@
 
 | Workflow | Purpose |
 |----------|---------|
-| `pick-runner.yml` | Runtime runner selection -- defaults to `kombi` (all self-hosted runners) |
-| `build-and-push.yml` | Build Docker image, push to GHCR |
-| `deploy-coolify-v2.yml` | Coolify deploy: resolve UUIDs from Doppler prd_infra, update image tag, trigger redeploy, health check. No env sync. |
-| `deploy-dual.yml` | Space-first canary deploy: wraps deploy-coolify-v2.yml for dual-server pattern (Space canary → IO production) |
+| `pick-runner-v2.yml` | Runtime runner selection -- defaults to `blacksmith-2vcpu-ubuntu-2204` (Blacksmith cloud runners), fallback `kombi` |
+| `build-and-push.yml` | Build Docker image, push to GHCR (Blacksmith runners, GHA cache) |
+| `deploy-render.yml` | Render deploy: resolve service IDs from Doppler prd_render, update image tag via Render API, health check |
+| `deploy-render-staged.yml` | Staged deploy: wraps deploy-render.yml for Staging → Production pattern |
+
+### Archived Workflows (Coolify -- deactivated, not deleted)
+
+| Workflow | Purpose |
+|----------|---------|
+| `pick-runner.yml` | Legacy runner selection (self-hosted `kombi` default) |
+| `deploy-coolify-v2.yml` | Legacy Coolify deploy (replaced by deploy-render.yml) |
+| `deploy-dual.yml` | Legacy Space→IO canary deploy (replaced by deploy-render-staged.yml) |
 
 ## Infrastructure Overview
 
-**All `*.kombify.io` services run on the kombify-ionos IONOS VPS.**
+**All `*.kombify.io` and `*.mkvl.de` services run on Render (managed platform).**
 
-| Server | Role |
-|--------|------|
-| **kombify-ionos** (217.154.174.107) | **Production** -- all `*.kombify.io` services via Coolify |
-| **Hostinger VPS** | **Test/Fallback** -- `*.kombify.space` services via Coolify |
-| **Marcel's PC** | **Build** -- 2x kombi runners, local development |
+| Platform | Role |
+|----------|------|
+| **Render** | **Production** -- all services, managed PostgreSQL 17 (pgvector), managed Redis |
+| **kombify-ionos** (217.154.174.107) | **Fallback** -- archived Coolify deployments, self-hosted runners |
+| **Hostinger VPS** | **Fallback** -- archived Coolify deployments |
+| **Marcel's PC** | **Local development** -- 2x kombi runners (fallback) |
 
-OCI build server has been decommissioned (unreliable Docker connectivity during large image pushes).
+IaC Blueprint: `render.yaml` in workspace root defines all services and databases.
 
 ## CI Runner Topology
 
-All workflows use `pick-runner.yml` to select the preferred runner label at runtime.
+All workflows use `pick-runner-v2.yml` to select the preferred runner label at runtime.
 
-Current self-hosted labels:
+Runner labels:
 
-- `kombi`: All self-hosted runners (Marcel's PC, new server, Hostinger VPS)
+- `blacksmith-2vcpu-ubuntu-2204`: Blacksmith cloud runners (primary, ephemeral)
+- `kombi`: Self-hosted runners (fallback -- Marcel's PC, kombi-server)
 
 Policy:
 
-- Default: `kombi` (all self-hosted runners)
+- Default: `blacksmith-2vcpu-ubuntu-2204` (Blacksmith cloud runners)
+- Fallback: `kombi` (self-hosted runners)
 - `ubuntu-latest` consumes GitHub Actions minutes; avoid
-- **Never use kombify-ionos as a CI runner** -- it is the production host
+- **Never use kombify-ionos as a CI runner** -- it hosts archived Coolify deployments
 
 ## Deploy Target
 
-Coolify manages both IONOS (production) and Hostinger (test/fallback).
-GitHub Actions trigger Coolify deployments, no direct SSH to production hosts.
+Render manages all production services via API-driven deployments.
+GitHub Actions trigger Render deployments via `deploy-render.yml`.
+Render Preview Environments provide automatic PR-based staging.
+Doppler `prd_render` config stores Render API key and service IDs.

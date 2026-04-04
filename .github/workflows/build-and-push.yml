@@ -51,10 +51,10 @@ on:
         type: boolean
         default: true
       runner:
-        description: 'Preferred runner label. Defaults to the shared OCI self-hosted runner label.'
+        description: 'Preferred runner label. Defaults to Blacksmith cloud runner.'
         required: false
         type: string
-        default: ''
+        default: 'blacksmith-4vcpu-ubuntu-2204'
     secrets:
       GH_PAT:
         required: false
@@ -77,9 +77,9 @@ on:
 jobs:
   pick-runner:
     name: Pick runner
-    uses: KombiverseLabs/.github/.github/workflows/pick-runner.yml@main
+    uses: KombiverseLabs/.github/.github/workflows/pick-runner-v2.yml@main
     with:
-      preferred: ${{ inputs.runner || 'kombi' }}
+      preferred: ${{ inputs.runner || 'blacksmith-4vcpu-ubuntu-2204' }}
     secrets: inherit
 
   build:
@@ -230,51 +230,6 @@ jobs:
               print('EOF', file=handle)
           PYEOF
 
-      - name: Warm BuildKit image
-        run: |
-          if docker image inspect moby/buildkit:buildx-stable-1 >/dev/null 2>&1; then
-            exit 0
-          fi
-
-          for attempt in 1 2 3 4 5; do
-            if docker pull moby/buildkit:buildx-stable-1 && docker image inspect moby/buildkit:buildx-stable-1 >/dev/null 2>&1; then
-              exit 0
-            fi
-            echo "BuildKit image pull attempt ${attempt} failed; retrying in 10s"
-            sleep 10
-          done
-
-          echo "Failed to cache moby/buildkit:buildx-stable-1 on the runner" >&2
-          exit 1
-
-      - name: Prepare local build cache
-        id: local-cache
-        run: |
-          CACHE_ROOT="${KOMBIFY_BUILDX_CACHE_ROOT:-/var/lib/kombify-buildx-cache}"
-          if ! mkdir -p "$CACHE_ROOT" >/dev/null 2>&1; then
-            CACHE_ROOT="${HOME}/.cache/kombify-buildx-cache"
-            mkdir -p "$CACHE_ROOT"
-          fi
-          REPO_SLUG="${GITHUB_REPOSITORY//\//-}"
-          CACHE_KEY="${{ inputs.image-name }}"
-          if [ -z "$CACHE_KEY" ]; then
-            CACHE_KEY="${{ inputs.dockerfile }}"
-          fi
-          CACHE_KEY="${CACHE_KEY//\//-}"
-          CACHE_KEY="${CACHE_KEY//:/-}"
-          CACHE_KEY="${CACHE_KEY// /-}"
-          CACHE_DIR="${CACHE_ROOT}/${REPO_SLUG}/${CACHE_KEY}"
-          CACHE_NEW_DIR="${CACHE_DIR}-${GITHUB_RUN_ID:-manual}-${GITHUB_JOB:-build}-new"
-
-          mkdir -p "$CACHE_DIR" "$CACHE_NEW_DIR"
-
-          echo "cache_dir=$CACHE_DIR" >> "$GITHUB_OUTPUT"
-          echo "cache_new_dir=$CACHE_NEW_DIR" >> "$GITHUB_OUTPUT"
-
-      - name: Clean stale BuildKit temp data
-        run: |
-          rm -rf /tmp/buildkitd-config* /tmp/buildx-* 2>/dev/null || true
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
         with:
@@ -324,25 +279,10 @@ jobs:
             ${{ steps.doppler-build-secrets.outputs.docker_secrets }}
           secret-files: |
             ${{ steps.doppler-runtime-env.outputs.docker_secret_file }}
-          cache-from: type=local,src=${{ steps.local-cache.outputs.cache_dir }}
-          cache-to: type=local,dest=${{ steps.local-cache.outputs.cache_new_dir }},mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           provenance: false
           sbom: false
-
-      - name: Finalize local build cache
-        if: always()
-        run: |
-          CACHE_DIR="${{ steps.local-cache.outputs.cache_dir }}"
-          CACHE_NEW_DIR="${{ steps.local-cache.outputs.cache_new_dir }}"
-
-          if [ -d "$CACHE_NEW_DIR" ]; then
-            if [ "$(find "$CACHE_NEW_DIR" -mindepth 1 -maxdepth 1 | wc -l)" -gt 0 ]; then
-              rm -rf "$CACHE_DIR"
-              mv "$CACHE_NEW_DIR" "$CACHE_DIR"
-            else
-              rm -rf "$CACHE_NEW_DIR"
-            fi
-          fi
 
       - name: Extract single deploy tag
         id: single-tag

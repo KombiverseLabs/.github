@@ -1,0 +1,49 @@
+# Reusable: Runtime runner selection (v2 — Blacksmith default).
+#
+# HOW IT WORKS
+# ────────────
+# Returns the runner label to use in downstream jobs.
+# Default: Blacksmith cloud runners (fast, ephemeral, Docker pre-installed).
+# Fallback: `kombi` self-hosted runners on IONOS server + Marcel's PC.
+#
+# Runner landscape (2026-04):
+# - `blacksmith-4vcpu-ubuntu-2204` (primary) → Blacksmith cloud runners
+# - `kombi` (fallback)                       → 4 dedicated runners on kombi-server + 2 on Marcel's PC
+# - `ubuntu-latest` (last resort)            → GitHub Hosted (uses minutes, avoid)
+#
+# Centrally controlled via org variables: CI_RUNNER, BUILD_RUNNER, DEPLOY_RUNNER
+# - `ubuntu-latest`                          → GitHub Hosted (uses minutes, avoid)
+#
+# NOTE: `kombify-ionos` is the production host — never use it as CI capacity.
+name: Pick Runner v2
+
+on:
+  workflow_call:
+    inputs:
+      preferred:
+        description: 'Runner label to use. Defaults to blacksmith-4vcpu-ubuntu-2204.'
+        required: false
+        type: string
+        default: 'blacksmith-4vcpu-ubuntu-2204'
+    secrets:
+      GH_PAT:
+        required: false
+    outputs:
+      runner:
+        description: 'The selected runner label to use in subsequent jobs'
+        value: ${{ jobs.pick.outputs.runner }}
+
+jobs:
+  pick:
+    name: Select runner
+    runs-on: ${{ inputs.preferred || 'blacksmith-4vcpu-ubuntu-2204' }}
+    timeout-minutes: 2
+    outputs:
+      runner: ${{ steps.select.outputs.runner }}
+    steps:
+      - name: Output selected runner
+        id: select
+        run: |
+          RUNNER="${{ inputs.preferred || 'blacksmith-4vcpu-ubuntu-2204' }}"
+          echo "runner=$RUNNER" >> "$GITHUB_OUTPUT"
+          echo "→ Selected: $RUNNER"

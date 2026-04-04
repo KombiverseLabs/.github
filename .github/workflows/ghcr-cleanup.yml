@@ -1,0 +1,135 @@
+# Automatic GHCR cleanup — runs weekly and on manual trigger.
+# Deletes old container image versions per package, keeping only the
+# N most recent tagged versions + any version carrying a protected tag.
+name: GHCR Cleanup
+
+on:
+  schedule:
+    # Every Sunday at 03:00 UTC
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+    inputs:
+      keep-versions:
+        description: 'Number of recent tagged versions to keep per package'
+        required: false
+        default: '5'
+        type: string
+      dry-run:
+        description: 'If true, only list what would be deleted'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+permissions:
+  packages: write
+
+jobs:
+  cleanup:
+    name: Prune old GHCR images
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      ORG: KombiverseLabs
+      KEEP_VERSIONS: ${{ inputs.keep-versions || '5' }}
+      DRY_RUN: ${{ inputs.dry-run || 'false' }}
+
+    steps:
+      - name: Prune container versions
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+
+          PROTECTED_TAGS="latest|main|master|production|staging|space-latest"
+          KEEP="${KEEP_VERSIONS}"
+          DRY="${DRY_RUN}"
+
+          echo "### GHCR Cleanup Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Package | Versions Before | Deleted | Kept | Protected |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---------|----------------|---------|------|-----------|" >> "$GITHUB_STEP_SUMMARY"
+
+          TOTAL_DELETED=0
+
+          PACKAGES=$(gh api --paginate "/orgs/${ORG}/packages?package_type=container" --jq '.[].name')
+
+          for PKG in $PACKAGES; do
+            echo "──────────────────────────────────────"
+            echo "Processing: ${PKG}"
+
+            VERSIONS_JSON=$(gh api --paginate \
+              "/orgs/${ORG}/packages/container/${PKG}/versions" \
+              --jq '[.[] | {id: .id, tags: .metadata.container.tags, created: .created_at}]' 2>/dev/null || echo "[]")
+
+            TOTAL=$(echo "$VERSIONS_JSON" | jq 'length')
+
+            if [ "$TOTAL" -eq 0 ]; then
+              echo "  No versions found, skipping."
+              echo "| ${PKG} | 0 | 0 | 0 | 0 |" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+
+            PROTECTED_IDS=""
+            PROTECTED_COUNT=0
+            DELETABLE_IDS=""
+
+            while IFS= read -r line; do
+              VID=$(echo "$line" | jq -r '.id')
+              TAGS=$(echo "$line" | jq -r '.tags | join(",")')
+
+              if echo "$TAGS" | grep -qEi "(${PROTECTED_TAGS})"; then
+                PROTECTED_IDS="${PROTECTED_IDS} ${VID}"
+                PROTECTED_COUNT=$((PROTECTED_COUNT + 1))
+                echo "  [PROTECTED] id=${VID} tags=${TAGS}"
+              else
+                DELETABLE_IDS="${DELETABLE_IDS} ${VID}"
+              fi
+            done < <(echo "$VERSIONS_JSON" | jq -c 'sort_by(.created) | reverse | .[]')
+
+            # From deletable, keep the N most recent (they're already sorted newest-first)
+            KEPT=0
+            TO_DELETE=""
+            for VID in $DELETABLE_IDS; do
+              KEPT=$((KEPT + 1))
+              if [ "$KEPT" -gt "$KEEP" ]; then
+                TO_DELETE="${TO_DELETE} ${VID}"
+              fi
+            done
+
+            KEPT_COUNT=$((KEPT > KEEP ? KEEP : KEPT))
+            DELETE_COUNT=$(echo "$TO_DELETE" | wc -w | tr -d ' ')
+
+            if [ "$DELETE_COUNT" -eq 0 ]; then
+              echo "  Nothing to delete (${TOTAL} versions, ${PROTECTED_COUNT} protected, ${KEPT_COUNT} recent kept)."
+              echo "| ${PKG} | ${TOTAL} | 0 | ${KEPT_COUNT} | ${PROTECTED_COUNT} |" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+
+            echo "  Will delete ${DELETE_COUNT} old versions."
+
+            if [ "$DRY" = "true" ]; then
+              echo "  [DRY RUN] Skipping actual deletion."
+              echo "| ${PKG} | ${TOTAL} | ${DELETE_COUNT} (dry) | ${KEPT_COUNT} | ${PROTECTED_COUNT} |" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+
+            for VID in $TO_DELETE; do
+              echo "  Deleting version ${VID}..."
+              gh api --method DELETE \
+                "/orgs/${ORG}/packages/container/${PKG}/versions/${VID}" \
+                2>/dev/null || echo "  Warning: Failed to delete ${VID}"
+              TOTAL_DELETED=$((TOTAL_DELETED + 1))
+            done
+
+            echo "| ${PKG} | ${TOTAL} | ${DELETE_COUNT} | ${KEPT_COUNT} | ${PROTECTED_COUNT} |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Total deleted:** ${TOTAL_DELETED}" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Keep policy:** ${KEEP} most recent per package + protected tags" >> "$GITHUB_STEP_SUMMARY"
+          echo ""
+          echo "Done. Deleted ${TOTAL_DELETED} total versions across all packages."
