@@ -22,12 +22,12 @@
 
 ## Infrastructure Overview
 
-**All `*.kombify.io` and `*.mkvl.de` services run on Render (managed platform).**
+**Canonical rule:** customer-facing `*.kombify.io` services default to Render, with explicit documented exceptions.
 
 | Platform | Role |
 |----------|------|
-| **Render** | **Production** -- all services, managed PostgreSQL 17 (pgvector), managed Redis |
-| **kombify-ionos** (217.154.174.107) | **Fallback** -- archived Coolify deployments, self-hosted runners |
+| **Render** | **Production default** -- customer-facing SaaS services, managed PostgreSQL 17 (pgvector), managed Redis |
+| **kombify-ionos** (217.154.174.107) | **Production exception** -- kombify-Sim and company tools requiring VPS capabilities |
 | **Hostinger VPS** | **Fallback** -- archived Coolify deployments |
 | **Marcel's PC** | **Local development** -- 2x kombi runners (fallback) |
 
@@ -51,7 +51,11 @@ Policy:
 
 ## Deploy Target
 
-Render manages all production services via API-driven deployments.
+Render manages the default production path via API-driven deployments.
 GitHub Actions trigger Render deployments via `deploy-render.yml`.
 Render Preview Environments provide automatic PR-based staging.
 Doppler `prd_render` config stores Render API key and service IDs.
+
+Exception:
+
+- `kombify-Sim` deploys to the IONOS VPS via `deploy-vps-ssh.yml` because it requires Docker socket access and privileged runtime behavior.

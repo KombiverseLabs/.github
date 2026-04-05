@@ -49,6 +49,26 @@ on:
         required: false
         type: string
         default: "prd_infra"
+      ssh-host-key:
+        description: "Secret key name for the target host/IP"
+        required: false
+        type: string
+        default: "IONOS_VPS_HOST"
+      ssh-user-key:
+        description: "Secret key name for the SSH username"
+        required: false
+        type: string
+        default: "IONOS_VPS_USER"
+      ssh-private-key-key:
+        description: "Secret key name for the SSH private key"
+        required: false
+        type: string
+        default: "IONOS_SSH_PRIVATE_KEY"
+      ssh-port-key:
+        description: "Optional secret key name for the SSH port"
+        required: false
+        type: string
+        default: ""
     secrets:
       DOPPLER_TOKEN:
         description: "Doppler token with access to VPS SSH credentials"
@@ -85,9 +105,34 @@ jobs:
         run: |
           set -euo pipefail
 
-          VPS_HOST=$(doppler secrets get IONOS_VPS_HOST --plain --project ${{ inputs.doppler-project }} --config ${{ inputs.doppler-config }} --no-read-env)
-          VPS_USER=$(doppler secrets get IONOS_VPS_USER --plain --project ${{ inputs.doppler-project }} --config ${{ inputs.doppler-config }} --no-read-env)
-          SSH_KEY=$(doppler secrets get IONOS_SSH_PRIVATE_KEY --plain --project ${{ inputs.doppler-project }} --config ${{ inputs.doppler-config }} --no-read-env)
+          if [ -z "${DOPPLER_TOKEN:-}" ]; then
+            echo "::error::DOPPLER_TOKEN is empty"
+            exit 1
+          fi
+
+          doppler_secret() {
+            local secret_name="$1"
+            doppler secrets get "$secret_name" \
+              --plain \
+              --project "${{ inputs.doppler-project }}" \
+              --config "${{ inputs.doppler-config }}" \
+              --token "$DOPPLER_TOKEN" \
+              --no-read-env
+          }
+
+          doppler_secret_optional() {
+            local secret_name="$1"
+            if [ -z "$secret_name" ]; then
+              return 0
+            fi
+            doppler_secret "$secret_name"
+          }
+
+          VPS_HOST=$(doppler_secret "${{ inputs.ssh-host-key }}")
+          VPS_USER=$(doppler_secret "${{ inputs.ssh-user-key }}")
+          SSH_KEY=$(doppler_secret "${{ inputs.ssh-private-key-key }}")
+          SSH_PORT=$(doppler_secret_optional "${{ inputs.ssh-port-key }}")
+          SSH_PORT="${SSH_PORT:-22}"
           echo "::add-mask::$SSH_KEY"
 
           SSH_KEY_FILE=$(mktemp)
@@ -101,6 +146,7 @@ jobs:
           echo "Deploying $COMPOSE_SVC in $COMPOSE_DIR on ${VPS_USER}@${VPS_HOST}"
 
           ssh -i "$SSH_KEY_FILE" \
+            -p "$SSH_PORT" \
             -o StrictHostKeyChecking=no \
             -o BatchMode=yes \
             -o ConnectTimeout=10 \
