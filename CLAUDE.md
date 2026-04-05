@@ -26,12 +26,12 @@
 
 | Platform | Role |
 |----------|------|
-| **Render** | **Production default** -- customer-facing SaaS services, managed PostgreSQL 17 (pgvector), managed Redis |
+| **Render** | **Production default** -- customer-facing SaaS services, managed PostgreSQL 17 (pgvector), managed Valkey 8 |
 | **kombify-ionos** (217.154.174.107) | **Production exception** -- kombify-Sim and company tools requiring VPS capabilities |
-| **Hostinger VPS** | **Fallback** -- archived Coolify deployments |
+| **Hostinger VPS** | **Dev Tools** -- kombify.space (Excalidraw, Docs-Tools) |
 | **Marcel's PC** | **Local development** -- 2x kombi runners (fallback) |
 
-IaC Blueprint: `render.yaml` in workspace root defines all services and databases.
+Render Projects: kombify-websites, kombify-ai, kombify-tools, kombify-infra. Details in [Infrastructure Overview](../kombify%20Core/internal-docs/docs/infrastructure/infrastructure-overview.md).
 
 ## CI Runner Topology
 

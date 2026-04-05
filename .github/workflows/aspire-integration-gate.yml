@@ -10,11 +10,6 @@ on:
         required: false
         type: string
         default: 'latest'
-      admin-backend-image-tag:
-        description: 'Admin Backend GHCR image tag'
-        required: false
-        type: string
-        default: 'latest'
       admin-frontend-image-tag:
         description: 'Admin Frontend GHCR image tag'
         required: false
@@ -79,7 +74,6 @@ jobs:
         env:
           KOMBIFY_ASPIRE_PROFILE: integration-ghcr
           KOMBIFY_CLOUD_IMAGE_TAG: ${{ inputs.cloud-image-tag }}
-          KOMBIFY_ADMIN_BACKEND_IMAGE_TAG: ${{ inputs.admin-backend-image-tag }}
           KOMBIFY_ADMIN_IMAGE_TAG: ${{ inputs.admin-frontend-image-tag }}
           KOMBIFY_AI_IMAGE_TAG: ${{ inputs.ai-image-tag }}
           Parameters__kombifyDbPassword: aspire-gate-test
