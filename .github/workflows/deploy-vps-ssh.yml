@@ -133,7 +133,6 @@ jobs:
           SSH_KEY=$(doppler_secret "${{ inputs.ssh-private-key-key }}")
           SSH_PORT=$(doppler_secret_optional "${{ inputs.ssh-port-key }}")
           SSH_PORT="${SSH_PORT:-22}"
-          echo "::add-mask::$SSH_KEY"
 
           SSH_KEY_FILE=$(mktemp)
           chmod 600 "$SSH_KEY_FILE"

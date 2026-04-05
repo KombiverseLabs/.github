@@ -25,6 +25,7 @@ class DeployVpsSshContractTest(unittest.TestCase):
         self.assertIn("--no-read-env", TEXT)
         self.assertIn('SSH_PORT="${SSH_PORT:-22}"', TEXT)
         self.assertIn('-p "$SSH_PORT" \\', TEXT)
+        self.assertNotIn('echo "::add-mask::$SSH_KEY"', TEXT)
 
     def test_workflow_resolves_expected_vps_secrets_via_helper(self) -> None:
         self.assertIn("doppler_secret() {", TEXT)
