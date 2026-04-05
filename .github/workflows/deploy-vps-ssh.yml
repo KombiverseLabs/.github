@@ -20,6 +20,16 @@ on:
         required: false
         type: string
         default: "/opt/kombify-sim"
+      compose-file-source:
+        description: "Optional local compose file to upload before deployment"
+        required: false
+        type: string
+        default: ""
+      compose-file-destination:
+        description: "Remote compose filename under compose-dir"
+        required: false
+        type: string
+        default: "docker-compose.yml"
       health-check-url:
         description: "URL to probe after deployment"
         required: false
@@ -82,6 +92,9 @@ jobs:
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v4
+        if: inputs.compose-file-source != ''
+
       - name: Install Doppler CLI
         shell: bash
         run: |
@@ -141,8 +154,33 @@ jobs:
 
           COMPOSE_DIR="${{ inputs.compose-dir }}"
           COMPOSE_SVC="${{ inputs.compose-service }}"
+          COMPOSE_FILE_SOURCE="${{ inputs.compose-file-source }}"
+          COMPOSE_FILE_DEST="${{ inputs.compose-file-destination }}"
 
           echo "Deploying $COMPOSE_SVC in $COMPOSE_DIR on ${VPS_USER}@${VPS_HOST}"
+
+          if [ -n "$COMPOSE_FILE_SOURCE" ]; then
+            if [ ! -f "$COMPOSE_FILE_SOURCE" ]; then
+              echo "::error::compose file not found: $COMPOSE_FILE_SOURCE"
+              exit 1
+            fi
+
+            ssh -i "$SSH_KEY_FILE" \
+              -p "$SSH_PORT" \
+              -o StrictHostKeyChecking=no \
+              -o BatchMode=yes \
+              -o ConnectTimeout=10 \
+              "${VPS_USER}@${VPS_HOST}" \
+              "mkdir -p ${COMPOSE_DIR}"
+
+            scp -i "$SSH_KEY_FILE" \
+              -P "$SSH_PORT" \
+              -o StrictHostKeyChecking=no \
+              -o BatchMode=yes \
+              -o ConnectTimeout=10 \
+              "$COMPOSE_FILE_SOURCE" \
+              "${VPS_USER}@${VPS_HOST}:${COMPOSE_DIR}/${COMPOSE_FILE_DEST}"
+          fi
 
           ssh -i "$SSH_KEY_FILE" \
             -p "$SSH_PORT" \

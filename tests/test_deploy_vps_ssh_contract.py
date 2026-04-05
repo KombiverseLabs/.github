@@ -16,6 +16,8 @@ class DeployVpsSshContractTest(unittest.TestCase):
         self.assertIn("ssh-private-key-key:", TEXT)
         self.assertIn('default: "IONOS_SSH_PRIVATE_KEY"', TEXT)
         self.assertIn("ssh-port-key:", TEXT)
+        self.assertIn("compose-file-source:", TEXT)
+        self.assertIn("compose-file-destination:", TEXT)
 
     def test_workflow_fails_clearly_when_doppler_token_is_missing(self) -> None:
         self.assertIn('echo "::error::DOPPLER_TOKEN is empty"', TEXT)
@@ -34,6 +36,14 @@ class DeployVpsSshContractTest(unittest.TestCase):
         self.assertIn('VPS_USER=$(doppler_secret "${{ inputs.ssh-user-key }}")', TEXT)
         self.assertIn('SSH_KEY=$(doppler_secret "${{ inputs.ssh-private-key-key }}")', TEXT)
         self.assertIn('SSH_PORT=$(doppler_secret_optional "${{ inputs.ssh-port-key }}")', TEXT)
+        self.assertIn('COMPOSE_FILE_SOURCE="${{ inputs.compose-file-source }}"', TEXT)
+        self.assertIn('COMPOSE_FILE_DEST="${{ inputs.compose-file-destination }}"', TEXT)
+        self.assertIn('scp -i "$SSH_KEY_FILE" \\', TEXT)
+        self.assertIn('mkdir -p ${COMPOSE_DIR}', TEXT)
+
+    def test_workflow_checks_out_repo_when_syncing_compose_file(self) -> None:
+        self.assertIn("- uses: actions/checkout@v4", TEXT)
+        self.assertIn("if: inputs.compose-file-source != ''", TEXT)
 
 
 if __name__ == "__main__":
