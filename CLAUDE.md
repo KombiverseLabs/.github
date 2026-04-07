@@ -27,7 +27,8 @@
 | Platform | Role |
 |----------|------|
 | **Render** | **Production default** -- customer-facing SaaS services, managed PostgreSQL 17 (pgvector), managed Valkey 8 |
-| **kombify-ionos** (217.154.174.107) | **Production exception** -- kombify-Sim and company tools requiring VPS capabilities |
+| **kombify-ionos** (217.154.174.107) | **Production exception** -- kombify-Sim and company tools (*.mkvl.de) requiring VPS capabilities, managed via Coolify Cloud |
+| **kombify-ionos-dev** (82.165.251.178) | **Dev environments** -- *.kombify.dev, managed via Coolify Cloud |
 | **Hostinger VPS** | **Dev Tools** -- kombify.space (Excalidraw, Docs-Tools) |
 | **Marcel's PC** | **Local development** -- 2x kombi runners (fallback) |
 
@@ -47,7 +48,7 @@ Policy:
 - Default: `blacksmith-2vcpu-ubuntu-2204` (Blacksmith cloud runners)
 - Fallback: `kombi` (self-hosted runners)
 - `ubuntu-latest` consumes GitHub Actions minutes; avoid
-- **Never use kombify-ionos as a CI runner** -- it hosts archived Coolify deployments
+- **Never use kombify-ionos as a CI runner** -- it is a production host
 
 ## Deploy Target
 
@@ -58,4 +59,4 @@ Doppler `prd_render` config stores Render API key and service IDs.
 
 Exception:
 
-- `kombify-Sim` deploys to the IONOS VPS via `deploy-vps-ssh.yml` because it requires Docker socket access and privileged runtime behavior.
+- `kombify-Sim` deploys to the IONOS VPS via Coolify Cloud because it requires Docker socket access and privileged runtime behavior.
