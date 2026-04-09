@@ -114,10 +114,21 @@ jobs:
           SERVICE_ID="${{ steps.resolve.outputs.service_id }}"
           CLEAR_CACHE="${{ inputs.force && 'clear' || 'do_not_clear' }}"
 
+          # Build deploy payload — include imageUrl if image-repository is specified
+          IMAGE_REPO="${{ inputs.image-repository }}"
+          IMAGE_TAG="${{ inputs.image-tag }}"
+          if [ -n "$IMAGE_REPO" ]; then
+            BODY="{\"clearCache\": \"${CLEAR_CACHE}\", \"imageUrl\": \"${IMAGE_REPO}:${IMAGE_TAG}\"}"
+            echo "Deploying image: ${IMAGE_REPO}:${IMAGE_TAG}"
+          else
+            BODY="{\"clearCache\": \"${CLEAR_CACHE}\"}"
+            echo "Deploying latest build (no image override)"
+          fi
+
           RESPONSE=$(curl -sf -X POST \
             -H "Authorization: Bearer ${{ steps.resolve.outputs.api_key }}" \
             -H "Content-Type: application/json" \
-            -d "{\"clearCache\": \"${CLEAR_CACHE}\"}" \
+            -d "$BODY" \
             "https://api.render.com/v1/services/${SERVICE_ID}/deploys")
 
           DEPLOY_ID=$(echo "$RESPONSE" | jq -r '.id')
@@ -230,10 +241,21 @@ jobs:
           SERVICE_ID="${{ steps.resolve.outputs.service_id }}"
           CLEAR_CACHE="${{ inputs.force && 'clear' || 'do_not_clear' }}"
 
+          # Build deploy payload — include imageUrl if image-repository is specified
+          IMAGE_REPO="${{ inputs.image-repository }}"
+          IMAGE_TAG="${{ inputs.image-tag }}"
+          if [ -n "$IMAGE_REPO" ]; then
+            BODY="{\"clearCache\": \"${CLEAR_CACHE}\", \"imageUrl\": \"${IMAGE_REPO}:${IMAGE_TAG}\"}"
+            echo "Deploying image: ${IMAGE_REPO}:${IMAGE_TAG}"
+          else
+            BODY="{\"clearCache\": \"${CLEAR_CACHE}\"}"
+            echo "Deploying latest build (no image override)"
+          fi
+
           RESPONSE=$(curl -sf -X POST \
             -H "Authorization: Bearer ${{ steps.resolve.outputs.api_key }}" \
             -H "Content-Type: application/json" \
-            -d "{\"clearCache\": \"${CLEAR_CACHE}\"}" \
+            -d "$BODY" \
             "https://api.render.com/v1/services/${SERVICE_ID}/deploys")
 
           DEPLOY_ID=$(echo "$RESPONSE" | jq -r '.id')

@@ -32,7 +32,7 @@ on:
 jobs:
   pick-runner:
     name: Pick runner
-    uses: KombiverseLabs/.github/.github/workflows/pick-runner.yml@main
+    uses: KombiverseLabs/.github/.github/workflows/pick-runner-v2.yml@main
     with:
       preferred: ${{ inputs.runner || 'kombi' }}
     secrets: inherit
