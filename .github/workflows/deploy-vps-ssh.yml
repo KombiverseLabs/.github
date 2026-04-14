@@ -30,6 +30,21 @@ on:
         required: false
         type: string
         default: "docker-compose.yml"
+      runtime-env-project:
+        description: "Optional Doppler project to materialize as remote runtime env"
+        required: false
+        type: string
+        default: ""
+      runtime-env-config:
+        description: "Optional Doppler config to materialize as remote runtime env"
+        required: false
+        type: string
+        default: ""
+      runtime-env-file-destination:
+        description: "Remote runtime env filename under compose-dir"
+        required: false
+        type: string
+        default: ".env"
       health-check-url:
         description: "URL to probe after deployment"
         required: false
@@ -148,23 +163,23 @@ jobs:
           SSH_PORT="${SSH_PORT:-22}"
 
           SSH_KEY_FILE=$(mktemp)
+          DOPPLER_ENV_FILE=$(mktemp)
           chmod 600 "$SSH_KEY_FILE"
           printf '%s\n' "$SSH_KEY" > "$SSH_KEY_FILE"
-          trap 'rm -f "$SSH_KEY_FILE"' EXIT
+          trap 'rm -f "$SSH_KEY_FILE" "$DOPPLER_ENV_FILE"' EXIT
 
           COMPOSE_DIR="${{ inputs.compose-dir }}"
           COMPOSE_SVC="${{ inputs.compose-service }}"
           COMPOSE_FILE_SOURCE="${{ inputs.compose-file-source }}"
           COMPOSE_FILE_DEST="${{ inputs.compose-file-destination }}"
+          RUNTIME_ENV_PROJECT="${{ inputs.runtime-env-project }}"
+          RUNTIME_ENV_CONFIG="${{ inputs.runtime-env-config }}"
+          RUNTIME_ENV_DEST="${{ inputs.runtime-env-file-destination }}"
+          RUNTIME_ENV_STAGE=".doppler-runtime.env"
 
           echo "Deploying $COMPOSE_SVC in $COMPOSE_DIR on ${VPS_USER}@${VPS_HOST}"
 
-          if [ -n "$COMPOSE_FILE_SOURCE" ]; then
-            if [ ! -f "$COMPOSE_FILE_SOURCE" ]; then
-              echo "::error::compose file not found: $COMPOSE_FILE_SOURCE"
-              exit 1
-            fi
-
+          if [ -n "$COMPOSE_FILE_SOURCE" ] || { [ -n "$RUNTIME_ENV_PROJECT" ] && [ -n "$RUNTIME_ENV_CONFIG" ]; }; then
             ssh -i "$SSH_KEY_FILE" \
               -p "$SSH_PORT" \
               -o StrictHostKeyChecking=no \
@@ -172,6 +187,13 @@ jobs:
               -o ConnectTimeout=10 \
               "${VPS_USER}@${VPS_HOST}" \
               "mkdir -p ${COMPOSE_DIR}"
+          fi
+
+          if [ -n "$COMPOSE_FILE_SOURCE" ]; then
+            if [ ! -f "$COMPOSE_FILE_SOURCE" ]; then
+              echo "::error::compose file not found: $COMPOSE_FILE_SOURCE"
+              exit 1
+            fi
 
             scp -i "$SSH_KEY_FILE" \
               -P "$SSH_PORT" \
@@ -182,6 +204,24 @@ jobs:
               "${VPS_USER}@${VPS_HOST}:${COMPOSE_DIR}/${COMPOSE_FILE_DEST}"
           fi
 
+          if [ -n "$RUNTIME_ENV_PROJECT" ] && [ -n "$RUNTIME_ENV_CONFIG" ]; then
+            doppler secrets download \
+              --format env-no-quotes \
+              --no-file \
+              --project "$RUNTIME_ENV_PROJECT" \
+              --config "$RUNTIME_ENV_CONFIG" \
+              --token "$DOPPLER_TOKEN" \
+              --no-read-env > "$DOPPLER_ENV_FILE"
+
+            scp -i "$SSH_KEY_FILE" \
+              -P "$SSH_PORT" \
+              -o StrictHostKeyChecking=no \
+              -o BatchMode=yes \
+              -o ConnectTimeout=10 \
+              "$DOPPLER_ENV_FILE" \
+              "${VPS_USER}@${VPS_HOST}:${COMPOSE_DIR}/${RUNTIME_ENV_STAGE}"
+          fi
+
           ssh -i "$SSH_KEY_FILE" \
             -p "$SSH_PORT" \
             -o StrictHostKeyChecking=no \
@@ -189,6 +229,33 @@ jobs:
             -o ConnectTimeout=10 \
             "${VPS_USER}@${VPS_HOST}" \
             "cd ${COMPOSE_DIR} && \
+             if [ -n \"${RUNTIME_ENV_PROJECT}\" ] && [ -n \"${RUNTIME_ENV_CONFIG}\" ]; then \
+               python3 - \"${RUNTIME_ENV_STAGE}\" \"${RUNTIME_ENV_DEST}\" <<'PY'
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+
+def parse_env(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#') or '=' not in raw_line:
+            continue
+        key, value = raw_line.split('=', 1)
+        values[key] = value
+    return values
+
+merged = parse_env(dst)
+merged.update(parse_env(src))
+dst.write_text(''.join(f'{key}={value}\n' for key, value in merged.items()))
+if src.exists():
+    src.unlink()
+PY
+             fi && \
              docker compose pull ${COMPOSE_SVC} && \
              docker compose up -d --no-deps --remove-orphans ${COMPOSE_SVC}"
 

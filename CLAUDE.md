@@ -9,9 +9,9 @@
 |----------|---------|
 | `pick-runner-v2.yml` | Runtime runner selection -- defaults to `blacksmith-4vcpu-ubuntu-2204` (Blacksmith cloud runners), fallback `kombi` |
 | `build-and-push.yml` | Build Docker image, push to GHCR (Blacksmith runners, GHA cache) |
-| `deploy-render.yml` | Render deploy: resolve service IDs from Doppler prd_render, update image tag via Render API, health check |
-| `deploy-render-staged.yml` | Staged deploy: wraps deploy-render.yml for Staging → Production pattern |
-| `deploy-vps-ssh.yml` | SSH-basiertes VPS Deploy (Docker Compose auf Coolify Remote Servern), parametrisiert fuer Prod + Dev |
+| `deploy-render.yml` | Render deploy: resolve service IDs from Doppler `prd_render`, sync service runtime env from service-specific Doppler configs, update image tag via Render API, health check |
+| `deploy-render-staged.yml` | Staged deploy: staging/production variant with the same Doppler-first Render runtime sync |
+| `deploy-vps-ssh.yml` | SSH-basiertes VPS Deploy (Docker Compose auf Coolify/Remote Servern), materialisiert service-spezifische Runtime-Variablen aus Doppler und merged nur noch transitorische Remote-Reste |
 | `aspire-integration-gate.yml` | Multi-Service Health Checks via Aspire AppHost |
 
 ### Production-Only Archived Workflows (not used for production deploys, kept for reference)
@@ -62,22 +62,31 @@ Render manages the default production path via API-driven deployments.
 GitHub Actions trigger Render deployments via `deploy-render.yml`.
 Render Preview Environments provide automatic PR-based staging.
 Doppler `prd_render` config stores Render API key and service IDs.
+Service runtime configuration should come from service-specific Doppler configs (for example `prd_cloud`, `prd_admin`, `prd_ai`) and is synced onto the Render service before deploy.
 
 Exception:
 
 - `kombify-Sim` deploys to the IONOS VPS via `deploy-vps-ssh.yml` because it requires Docker socket access and privileged runtime behavior.
+- Render secret files and linked Render env groups remain explicit exceptions until migrated; they must not become the default place for normal app configuration.
 
 ### Dev Environment (kombify.dev on IONOS Dev VPS)
 
 Dev versions of all services run on the IONOS Dev VPS via Docker Compose.
-Deploy via `deploy-vps-ssh.yml` with `doppler-project: kombify-ionos-dev`, `doppler-config: dev`.
-IONOS SSH credentials stored in Doppler `kombify-ionos-dev/dev`.
+Deploy via `deploy-vps-ssh.yml` with:
+
+- `doppler-project` / `doppler-config` for SSH credentials
+- `runtime-env-project` / `runtime-env-config` for the service runtime environment
+
+IONOS SSH credentials stay in Doppler `kombify-ionos-dev/dev`.
+Service runtime values must come from service-specific Doppler configs and are materialized into the remote `.env` at deploy time.
+Coolify/Compose directories are not the source of truth for application secrets anymore; remaining remote-only keys are temporary migration exceptions that should be moved into Doppler.
 Also hosts: 4x self-hosted runners, Appwrite, Ollama, ToolHive (MCP Gateway).
 
 ### Company Tools (IONOS Production VPS)
 
 Company tools (Paperless, FreeScout, N8N, etc.) run on the IONOS production VPS via Docker Compose.
 IONOS SSH credentials stored in Doppler `kombify-io/prd_infra` (`IONOS_VPS_HOST`, `IONOS_VPS_USER`, `IONOS_SSH_PRIVATE_KEY`).
+Where feasible, production Compose services follow the same rule as dev: runtime env is materialized from Doppler during deploy and not maintained manually in Coolify/remote `.env` files.
 
 ### Company-Authentifizierung (mkvl.de)
 

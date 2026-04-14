@@ -1,6 +1,7 @@
 name: Deploy via Render (Staged)
-# Render deployment: resolve service ID from Doppler, trigger image deploy via API,
-# poll until live, health check. Supports optional staging → production pipeline.
+# Render deployment: resolve service ID from Doppler, sync runtime env from
+# service-specific Doppler configs, trigger image deploy via API, poll until
+# live, health check. Supports optional staging → production pipeline.
 #
 # Required Doppler config (behind DOPPLER_TOKEN_RENDER):
 #   RENDER_API_KEY           — Render API key
@@ -21,6 +22,19 @@ on:
         description: "Doppler key holding the Render service ID for staging"
         required: false
         type: string
+      runtime-env-project:
+        description: "Doppler project that owns the service runtime environment"
+        required: false
+        type: string
+      runtime-env-config:
+        description: "Doppler config that owns the service runtime environment"
+        required: false
+        type: string
+      preserve-runtime-env-extras:
+        description: "When true, do not delete direct Render env vars missing from Doppler"
+        required: false
+        type: boolean
+        default: false
       image-tag:
         description: "Docker image tag to deploy"
         required: false
@@ -106,6 +120,97 @@ jobs:
           SERVICE_ID=$(doppler secrets get "${{ inputs.service-id-key-staging }}" --plain)
           echo "service_id=$SERVICE_ID" >> "$GITHUB_OUTPUT"
           echo "Resolved staging service ID for ${{ inputs.service-name }}: $SERVICE_ID"
+
+      - name: Sync runtime environment from Doppler
+        if: inputs.runtime-env-project != '' && inputs.runtime-env-config != ''
+        shell: bash
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_RENDER }}
+          RENDER_API_KEY: ${{ steps.resolve.outputs.api_key }}
+          SERVICE_ID: ${{ steps.resolve.outputs.service_id }}
+          PRESERVE_RUNTIME_ENV_EXTRAS: ${{ inputs.preserve-runtime-env-extras }}
+          RUNTIME_ENV_JSON: ${{ runner.temp }}/render-runtime-env.json
+        run: |
+          doppler secrets download \
+            --format json \
+            --no-file \
+            --project "${{ inputs.runtime-env-project }}" \
+            --config "${{ inputs.runtime-env-config }}" \
+            --token "$DOPPLER_TOKEN" \
+            --no-read-env > "$RUNTIME_ENV_JSON"
+
+          python3 <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          service_id = os.environ["SERVICE_ID"]
+          api_key = os.environ["RENDER_API_KEY"]
+          env_path = Path(os.environ["RUNTIME_ENV_JSON"])
+          preserve_extras = os.environ["PRESERVE_RUNTIME_ENV_EXTRAS"].lower() == "true"
+          desired = json.loads(env_path.read_text(encoding="utf-8"))
+
+          headers = {
+              "Authorization": f"Bearer {api_key}",
+              "Accept": "application/json",
+              "Content-Type": "application/json",
+          }
+          base_url = f"https://api.render.com/v1/services/{service_id}/env-vars"
+
+          def request(method: str, url: str, body: dict | None = None) -> object:
+              payload = None
+              if body is not None:
+                  payload = json.dumps(body).encode("utf-8")
+              req = urllib.request.Request(url, data=payload, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req) as response:
+                      if response.status == 204:
+                          return None
+                      raw = response.read().decode("utf-8")
+                      return json.loads(raw) if raw else None
+              except urllib.error.HTTPError as exc:
+                  detail = exc.read().decode("utf-8", errors="replace")
+                  raise SystemExit(f"Render env sync failed ({method} {url}): HTTP {exc.code} {detail}") from exc
+
+          current_payload = request("GET", f"{base_url}?limit=100")
+          if isinstance(current_payload, list):
+              current_items = current_payload
+          elif isinstance(current_payload, dict):
+              current_items = (
+                  current_payload.get("items")
+                  or current_payload.get("data")
+                  or current_payload.get("envVars")
+                  or current_payload.get("environmentVariables")
+                  or []
+              )
+          else:
+              current_items = []
+
+          current_keys = {
+              item.get("envVarKey") or item.get("key") or item.get("name")
+              for item in current_items
+              if isinstance(item, dict)
+          }
+          current_keys.discard(None)
+
+          for key, value in desired.items():
+              encoded_key = urllib.parse.quote(str(key), safe="")
+              request("PUT", f"{base_url}/{encoded_key}", {"value": "" if value is None else str(value)})
+
+          stale_keys = sorted(current_keys - set(desired))
+          if not preserve_extras:
+              for key in stale_keys:
+                  encoded_key = urllib.parse.quote(str(key), safe="")
+                  request("DELETE", f"{base_url}/{encoded_key}")
+
+          print(
+              f"Synced {len(desired)} Doppler env vars to Render service {service_id}"
+              + (f"; removed {len(stale_keys)} stale direct vars" if not preserve_extras else "; preserved extra direct vars")
+          )
+          PY
 
       - name: Trigger deploy
         id: deploy
@@ -233,6 +338,97 @@ jobs:
           SERVICE_ID=$(doppler secrets get "${{ inputs.service-id-key-production }}" --plain)
           echo "service_id=$SERVICE_ID" >> "$GITHUB_OUTPUT"
           echo "Resolved production service ID for ${{ inputs.service-name }}: $SERVICE_ID"
+
+      - name: Sync runtime environment from Doppler
+        if: inputs.runtime-env-project != '' && inputs.runtime-env-config != ''
+        shell: bash
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_RENDER }}
+          RENDER_API_KEY: ${{ steps.resolve.outputs.api_key }}
+          SERVICE_ID: ${{ steps.resolve.outputs.service_id }}
+          PRESERVE_RUNTIME_ENV_EXTRAS: ${{ inputs.preserve-runtime-env-extras }}
+          RUNTIME_ENV_JSON: ${{ runner.temp }}/render-runtime-env.json
+        run: |
+          doppler secrets download \
+            --format json \
+            --no-file \
+            --project "${{ inputs.runtime-env-project }}" \
+            --config "${{ inputs.runtime-env-config }}" \
+            --token "$DOPPLER_TOKEN" \
+            --no-read-env > "$RUNTIME_ENV_JSON"
+
+          python3 <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          service_id = os.environ["SERVICE_ID"]
+          api_key = os.environ["RENDER_API_KEY"]
+          env_path = Path(os.environ["RUNTIME_ENV_JSON"])
+          preserve_extras = os.environ["PRESERVE_RUNTIME_ENV_EXTRAS"].lower() == "true"
+          desired = json.loads(env_path.read_text(encoding="utf-8"))
+
+          headers = {
+              "Authorization": f"Bearer {api_key}",
+              "Accept": "application/json",
+              "Content-Type": "application/json",
+          }
+          base_url = f"https://api.render.com/v1/services/{service_id}/env-vars"
+
+          def request(method: str, url: str, body: dict | None = None) -> object:
+              payload = None
+              if body is not None:
+                  payload = json.dumps(body).encode("utf-8")
+              req = urllib.request.Request(url, data=payload, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req) as response:
+                      if response.status == 204:
+                          return None
+                      raw = response.read().decode("utf-8")
+                      return json.loads(raw) if raw else None
+              except urllib.error.HTTPError as exc:
+                  detail = exc.read().decode("utf-8", errors="replace")
+                  raise SystemExit(f"Render env sync failed ({method} {url}): HTTP {exc.code} {detail}") from exc
+
+          current_payload = request("GET", f"{base_url}?limit=100")
+          if isinstance(current_payload, list):
+              current_items = current_payload
+          elif isinstance(current_payload, dict):
+              current_items = (
+                  current_payload.get("items")
+                  or current_payload.get("data")
+                  or current_payload.get("envVars")
+                  or current_payload.get("environmentVariables")
+                  or []
+              )
+          else:
+              current_items = []
+
+          current_keys = {
+              item.get("envVarKey") or item.get("key") or item.get("name")
+              for item in current_items
+              if isinstance(item, dict)
+          }
+          current_keys.discard(None)
+
+          for key, value in desired.items():
+              encoded_key = urllib.parse.quote(str(key), safe="")
+              request("PUT", f"{base_url}/{encoded_key}", {"value": "" if value is None else str(value)})
+
+          stale_keys = sorted(current_keys - set(desired))
+          if not preserve_extras:
+              for key in stale_keys:
+                  encoded_key = urllib.parse.quote(str(key), safe="")
+                  request("DELETE", f"{base_url}/{encoded_key}")
+
+          print(
+              f"Synced {len(desired)} Doppler env vars to Render service {service_id}"
+              + (f"; removed {len(stale_keys)} stale direct vars" if not preserve_extras else "; preserved extra direct vars")
+          )
+          PY
 
       - name: Trigger deploy
         id: deploy
