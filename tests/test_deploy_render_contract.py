@@ -30,6 +30,8 @@ class DeployRenderContractTest(unittest.TestCase):
     def test_staged_workflow_accepts_runtime_env_sync_inputs(self) -> None:
         self.assertIn("runtime-env-project:", STAGED_TEXT)
         self.assertIn("runtime-env-config:", STAGED_TEXT)
+        self.assertIn("render-credentials-project:", STAGED_TEXT)
+        self.assertIn("render-credentials-config:", STAGED_TEXT)
         self.assertIn("preserve-runtime-env-extras:", STAGED_TEXT)
 
     def test_staged_workflow_syncs_before_each_render_deploy(self) -> None:
@@ -53,6 +55,20 @@ class DeployRenderContractTest(unittest.TestCase):
             flags=re.DOTALL,
         )
         self.assertEqual(len(matches), 2)
+
+    def test_staged_workflow_scopes_render_secret_reads_explicitly(self) -> None:
+        self.assertEqual(
+            STAGED_TEXT.count("DOPPLER_SCOPE_ARGS=("),
+            2,
+        )
+        self.assertEqual(
+            STAGED_TEXT.count('--project "${{ inputs.render-credentials-project }}"'),
+            2,
+        )
+        self.assertEqual(
+            STAGED_TEXT.count('--config "${{ inputs.render-credentials-config }}"'),
+            2,
+        )
 
 
 if __name__ == "__main__":
