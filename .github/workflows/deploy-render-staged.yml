@@ -4,6 +4,7 @@ name: Deploy via Render (Staged)
 # live, health check. Supports optional staging → production pipeline.
 #
 # Required Doppler config (behind DOPPLER_TOKEN_RENDER):
+#   default scope: kombify-io/prd_render
 #   RENDER_API_KEY           — Render API key
 #   <service-id-key>         — Render service ID per service (e.g. RENDER_CLOUD_SERVICE_ID)
 # Optional runtime env config can use a separate token (DOPPLER_TOKEN_RUNTIME)
@@ -32,6 +33,16 @@ on:
         description: "Doppler config that owns the service runtime environment"
         required: false
         type: string
+      render-credentials-project:
+        description: "Doppler project that holds RENDER_API_KEY + Render service IDs"
+        required: false
+        type: string
+        default: "kombify-io"
+      render-credentials-config:
+        description: "Doppler config that holds RENDER_API_KEY + Render service IDs"
+        required: false
+        type: string
+        default: "prd_render"
       preserve-runtime-env-extras:
         description: "When true, do not delete direct Render env vars missing from Doppler"
         required: false
@@ -120,11 +131,18 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_RENDER }}
         run: |
-          RENDER_API_KEY=$(doppler secrets get RENDER_API_KEY --plain)
+          DOPPLER_SCOPE_ARGS=(
+            --project "${{ inputs.render-credentials-project }}"
+            --config "${{ inputs.render-credentials-config }}"
+            --token "$DOPPLER_TOKEN"
+            --no-read-env
+          )
+
+          RENDER_API_KEY=$(doppler secrets get RENDER_API_KEY --plain "${DOPPLER_SCOPE_ARGS[@]}")
           echo "::add-mask::$RENDER_API_KEY"
           echo "api_key=$RENDER_API_KEY" >> "$GITHUB_OUTPUT"
 
-          SERVICE_ID=$(doppler secrets get "${{ inputs.service-id-key-staging }}" --plain)
+          SERVICE_ID=$(doppler secrets get "${{ inputs.service-id-key-staging }}" --plain "${DOPPLER_SCOPE_ARGS[@]}")
           echo "service_id=$SERVICE_ID" >> "$GITHUB_OUTPUT"
           echo "Resolved staging service ID for ${{ inputs.service-name }}: $SERVICE_ID"
 
@@ -349,11 +367,18 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_RENDER }}
         run: |
-          RENDER_API_KEY=$(doppler secrets get RENDER_API_KEY --plain)
+          DOPPLER_SCOPE_ARGS=(
+            --project "${{ inputs.render-credentials-project }}"
+            --config "${{ inputs.render-credentials-config }}"
+            --token "$DOPPLER_TOKEN"
+            --no-read-env
+          )
+
+          RENDER_API_KEY=$(doppler secrets get RENDER_API_KEY --plain "${DOPPLER_SCOPE_ARGS[@]}")
           echo "::add-mask::$RENDER_API_KEY"
           echo "api_key=$RENDER_API_KEY" >> "$GITHUB_OUTPUT"
 
-          SERVICE_ID=$(doppler secrets get "${{ inputs.service-id-key-production }}" --plain)
+          SERVICE_ID=$(doppler secrets get "${{ inputs.service-id-key-production }}" --plain "${DOPPLER_SCOPE_ARGS[@]}")
           echo "service_id=$SERVICE_ID" >> "$GITHUB_OUTPUT"
           echo "Resolved production service ID for ${{ inputs.service-name }}: $SERVICE_ID"
 
