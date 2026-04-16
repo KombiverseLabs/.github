@@ -6,6 +6,8 @@ name: Deploy via Render (Staged)
 # Required Doppler config (behind DOPPLER_TOKEN_RENDER):
 #   RENDER_API_KEY           — Render API key
 #   <service-id-key>         — Render service ID per service (e.g. RENDER_CLOUD_SERVICE_ID)
+# Optional runtime env config can use a separate token (DOPPLER_TOKEN_RUNTIME)
+# when the service env lives in a different Doppler project/config.
 
 on:
   workflow_call:
@@ -81,6 +83,9 @@ on:
       DOPPLER_TOKEN_RENDER:
         description: "Doppler service token for config holding RENDER_API_KEY + service IDs"
         required: true
+      DOPPLER_TOKEN_RUNTIME:
+        description: "Optional Doppler service token for runtime env config sync"
+        required: false
 
 jobs:
   deploy-staging:
@@ -105,13 +110,15 @@ jobs:
             echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] https://packages.doppler.com/public/cli/deb/debian any-version main" \
               | sudo tee /etc/apt/sources.list.d/doppler-cli.list
           fi
-          sudo apt-get update -qq && sudo apt-get install -y doppler
+          sudo apt-get update -qq
+          sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+            apt-get install -y doppler
 
       - name: Resolve Render credentials
         id: resolve
         shell: bash
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_RENDER }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_RUNTIME || secrets.DOPPLER_TOKEN_RENDER }}
         run: |
           RENDER_API_KEY=$(doppler secrets get RENDER_API_KEY --plain)
           echo "::add-mask::$RENDER_API_KEY"
@@ -332,13 +339,15 @@ jobs:
             echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] https://packages.doppler.com/public/cli/deb/debian any-version main" \
               | sudo tee /etc/apt/sources.list.d/doppler-cli.list
           fi
-          sudo apt-get update -qq && sudo apt-get install -y doppler
+          sudo apt-get update -qq
+          sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+            apt-get install -y doppler
 
       - name: Resolve Render credentials
         id: resolve
         shell: bash
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_RENDER }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_RUNTIME || secrets.DOPPLER_TOKEN_RENDER }}
         run: |
           RENDER_API_KEY=$(doppler secrets get RENDER_API_KEY --plain)
           echo "::add-mask::$RENDER_API_KEY"
