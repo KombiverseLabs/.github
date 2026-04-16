@@ -230,11 +230,20 @@ jobs:
             echo "Deploying latest build (no image override)"
           fi
 
-          RESPONSE=$(curl -sf -X POST \
+          RESPONSE_FILE=$(mktemp)
+          HTTP_CODE=$(curl -sS -o "$RESPONSE_FILE" -w '%{http_code}' -X POST \
             -H "Authorization: Bearer ${{ steps.resolve.outputs.api_key }}" \
             -H "Content-Type: application/json" \
             -d "$BODY" \
             "https://api.render.com/v1/services/${SERVICE_ID}/deploys")
+          RESPONSE=$(cat "$RESPONSE_FILE")
+          rm -f "$RESPONSE_FILE"
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Render deploy trigger failed with HTTP $HTTP_CODE"
+            echo "$RESPONSE"
+            exit 1
+          fi
 
           DEPLOY_ID=$(echo "$RESPONSE" | jq -r '.id')
           echo "deploy_id=$DEPLOY_ID" >> "$GITHUB_OUTPUT"
@@ -448,11 +457,20 @@ jobs:
             echo "Deploying latest build (no image override)"
           fi
 
-          RESPONSE=$(curl -sf -X POST \
+          RESPONSE_FILE=$(mktemp)
+          HTTP_CODE=$(curl -sS -o "$RESPONSE_FILE" -w '%{http_code}' -X POST \
             -H "Authorization: Bearer ${{ steps.resolve.outputs.api_key }}" \
             -H "Content-Type: application/json" \
             -d "$BODY" \
             "https://api.render.com/v1/services/${SERVICE_ID}/deploys")
+          RESPONSE=$(cat "$RESPONSE_FILE")
+          rm -f "$RESPONSE_FILE"
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Render deploy trigger failed with HTTP $HTTP_CODE"
+            echo "$RESPONSE"
+            exit 1
+          fi
 
           DEPLOY_ID=$(echo "$RESPONSE" | jq -r '.id')
           echo "deploy_id=$DEPLOY_ID" >> "$GITHUB_OUTPUT"
