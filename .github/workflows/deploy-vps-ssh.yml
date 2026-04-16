@@ -231,30 +231,30 @@ jobs:
             "cd ${COMPOSE_DIR} && \
              if [ -n \"${RUNTIME_ENV_PROJECT}\" ] && [ -n \"${RUNTIME_ENV_CONFIG}\" ]; then \
                python3 - \"${RUNTIME_ENV_STAGE}\" \"${RUNTIME_ENV_DEST}\" <<'PY'
-from pathlib import Path
-import sys
+          from pathlib import Path
+          import sys
 
-src = Path(sys.argv[1])
-dst = Path(sys.argv[2])
+          src = Path(sys.argv[1])
+          dst = Path(sys.argv[2])
 
-def parse_env(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    if not path.exists():
-        return values
-    for raw_line in path.read_text().splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith('#') or '=' not in raw_line:
-            continue
-        key, value = raw_line.split('=', 1)
-        values[key] = value
-    return values
+          def parse_env(path: Path) -> dict[str, str]:
+              values: dict[str, str] = {}
+              if not path.exists():
+                  return values
+              for raw_line in path.read_text().splitlines():
+                  line = raw_line.strip()
+                  if not line or line.startswith('#') or '=' not in raw_line:
+                      continue
+                  key, value = raw_line.split('=', 1)
+                  values[key] = value
+              return values
 
-merged = parse_env(dst)
-merged.update(parse_env(src))
-dst.write_text(''.join(f'{key}={value}\n' for key, value in merged.items()))
-if src.exists():
-    src.unlink()
-PY
+          merged = parse_env(dst)
+          merged.update(parse_env(src))
+          dst.write_text(''.join(f'{key}={value}\n' for key, value in merged.items()))
+          if src.exists():
+              src.unlink()
+          PY
              fi && \
              docker compose pull ${COMPOSE_SVC} && \
              docker compose up -d --no-deps --remove-orphans ${COMPOSE_SVC}"
