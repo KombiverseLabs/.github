@@ -1,4 +1,5 @@
 import pathlib
+import re
 import unittest
 
 
@@ -36,6 +37,22 @@ class DeployRenderContractTest(unittest.TestCase):
         self.assertGreaterEqual(STAGED_TEXT.count("doppler secrets download \\"), 2)
         self.assertGreaterEqual(STAGED_TEXT.count('request("PUT", f"{base_url}/{encoded_key}", {"value": "" if value is None else str(value)})'), 2)
         self.assertGreaterEqual(STAGED_TEXT.count('request("DELETE", f"{base_url}/{encoded_key}")'), 2)
+
+    def test_staged_workflow_uses_render_token_for_render_credentials(self) -> None:
+        matches = re.findall(
+            r"- name: Resolve Render credentials.*?DOPPLER_TOKEN: \$\{\{ secrets\.DOPPLER_TOKEN_RENDER \}\}",
+            STAGED_TEXT,
+            flags=re.DOTALL,
+        )
+        self.assertEqual(len(matches), 2)
+
+    def test_staged_workflow_uses_runtime_token_only_for_runtime_env_sync(self) -> None:
+        matches = re.findall(
+            r"- name: Sync runtime environment from Doppler.*?DOPPLER_TOKEN: \$\{\{ secrets\.DOPPLER_TOKEN_RUNTIME \|\| secrets\.DOPPLER_TOKEN_RENDER \}\}",
+            STAGED_TEXT,
+            flags=re.DOTALL,
+        )
+        self.assertEqual(len(matches), 2)
 
 
 if __name__ == "__main__":

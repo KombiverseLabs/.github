@@ -118,7 +118,7 @@ jobs:
         id: resolve
         shell: bash
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_RUNTIME || secrets.DOPPLER_TOKEN_RENDER }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_RENDER }}
         run: |
           RENDER_API_KEY=$(doppler secrets get RENDER_API_KEY --plain)
           echo "::add-mask::$RENDER_API_KEY"
@@ -132,7 +132,7 @@ jobs:
         if: inputs.runtime-env-project != '' && inputs.runtime-env-config != ''
         shell: bash
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_RENDER }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_RUNTIME || secrets.DOPPLER_TOKEN_RENDER }}
           RENDER_API_KEY: ${{ steps.resolve.outputs.api_key }}
           SERVICE_ID: ${{ steps.resolve.outputs.service_id }}
           PRESERVE_RUNTIME_ENV_EXTRAS: ${{ inputs.preserve-runtime-env-extras }}
@@ -347,7 +347,7 @@ jobs:
         id: resolve
         shell: bash
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_RUNTIME || secrets.DOPPLER_TOKEN_RENDER }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_RENDER }}
         run: |
           RENDER_API_KEY=$(doppler secrets get RENDER_API_KEY --plain)
           echo "::add-mask::$RENDER_API_KEY"
@@ -361,7 +361,7 @@ jobs:
         if: inputs.runtime-env-project != '' && inputs.runtime-env-config != ''
         shell: bash
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_RENDER }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_RUNTIME || secrets.DOPPLER_TOKEN_RENDER }}
           RENDER_API_KEY: ${{ steps.resolve.outputs.api_key }}
           SERVICE_ID: ${{ steps.resolve.outputs.service_id }}
           PRESERVE_RUNTIME_ENV_EXTRAS: ${{ inputs.preserve-runtime-env-extras }}
