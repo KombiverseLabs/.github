@@ -266,6 +266,9 @@ jobs:
       - name: Build and push
         id: build
         uses: docker/build-push-action@v7
+        env:
+          # Build summaries stay enabled, but the artifact-backed build record is not worth noisy quota warnings.
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
           context: ${{ inputs.context }}
           file: ${{ inputs.dockerfile }}
