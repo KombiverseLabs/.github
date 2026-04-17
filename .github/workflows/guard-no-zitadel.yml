@@ -1,4 +1,4 @@
-name: Guard — No Zitadel (Reusable)
+name: Guard - No Zitadel (Reusable)
 
 on:
   workflow_call:
@@ -20,7 +20,6 @@ jobs:
             --include="*.svelte" \
             --include="*.yml" \
             --include="*.yaml" \
-            --include="*.env*" \
             --include="*.json" \
             --include="*.md" \
             -l 2>/dev/null \
@@ -34,7 +33,6 @@ jobs:
             | grep -v "AUDIT-" \
             | grep -v "auth0-cutover" \
             | grep -v "architecture-drift" \
-            | grep -v "MEMORY" \
             | grep -v "agile-drifting-fog" \
             || true)
 
