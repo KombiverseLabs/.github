@@ -1,0 +1,49 @@
+name: Guard — No Zitadel (Reusable)
+
+on:
+  workflow_call:
+
+jobs:
+  guard:
+    name: Check no Zitadel references
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan for Zitadel references
+        run: |
+          # Exclude: the guard file itself, vendor/, node_modules/, _archive/, .git/,
+          # and any audit/archive docs that legitimately mention Zitadel history.
+          FOUND=$(grep -ri "zitadel" . \
+            --include="*.go" \
+            --include="*.ts" \
+            --include="*.svelte" \
+            --include="*.yml" \
+            --include="*.yaml" \
+            --include="*.env*" \
+            --include="*.json" \
+            --include="*.md" \
+            -l 2>/dev/null \
+            | grep -v "vendor/" \
+            | grep -v "node_modules/" \
+            | grep -v ".git/" \
+            | grep -v "_archive/" \
+            | grep -v "guard-no-zitadel" \
+            | grep -v "check-no-zitadel" \
+            | grep -v "audits/" \
+            | grep -v "AUDIT-" \
+            | grep -v "auth0-cutover" \
+            | grep -v "architecture-drift" \
+            | grep -v "MEMORY" \
+            | grep -v "agile-drifting-fog" \
+            || true)
+
+          if [ -n "$FOUND" ]; then
+            echo "ERROR: Zitadel references found in active paths:"
+            echo "$FOUND"
+            echo ""
+            echo "These must be removed before merging. Zitadel was replaced by Auth0 (cutover 2026-04-15)."
+            exit 1
+          fi
+
+          echo "No Zitadel references found in active paths."
