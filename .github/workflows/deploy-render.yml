@@ -192,9 +192,17 @@ jobs:
           }
           current_keys.discard(None)
 
+          # Render rejects empty-string env vars with HTTP 400
+          # ("must provide a value or generateValue must be set to true").
+          # Optional Doppler secrets (e.g. SERVICE_AUTH_SECRET_NEXT during a
+          # non-rotation window) legitimately carry empty strings — skip the
+          # PUT, but still treat the key as "desired" so any pre-existing
+          # Render value is not deleted by the stale-key sweep below.
           for key, value in desired.items():
+              if value is None or str(value) == "":
+                  continue
               encoded_key = urllib.parse.quote(str(key), safe="")
-              request("PUT", f"{base_url}/{encoded_key}", {"value": "" if value is None else str(value)})
+              request("PUT", f"{base_url}/{encoded_key}", {"value": str(value)})
 
           stale_keys = sorted(current_keys - set(desired))
           if not preserve_extras:
