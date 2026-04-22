@@ -6,20 +6,17 @@ on:
   workflow_call:
     inputs:
       cloud-image-tag:
-        description: 'Cloud GHCR image tag'
-        required: false
+        description: 'Cloud GHCR image tag. Must be explicit; latest is rejected.'
+        required: true
         type: string
-        default: 'latest'
       admin-frontend-image-tag:
-        description: 'Admin Frontend GHCR image tag'
-        required: false
+        description: 'Admin Frontend GHCR image tag. Must be explicit; latest is rejected.'
+        required: true
         type: string
-        default: 'latest'
       ai-image-tag:
-        description: 'AI Server GHCR image tag'
-        required: false
+        description: 'AI Server GHCR image tag. Must be explicit; latest is rejected.'
+        required: true
         type: string
-        default: 'latest'
       runner:
         description: 'Runner label'
         required: false
@@ -68,6 +65,18 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Validate image tags
+        run: |
+          for tag in \
+            "${{ inputs.cloud-image-tag }}" \
+            "${{ inputs.admin-frontend-image-tag }}" \
+            "${{ inputs.ai-image-tag }}"; do
+            if [ -z "$tag" ] || [ "$tag" = "latest" ]; then
+              echo "::error::Aspire integration gate requires explicit non-latest image tags"
+              exit 1
+            fi
+          done
 
       - name: Start Aspire integration-ghcr
         working-directory: kombify-core/aspire

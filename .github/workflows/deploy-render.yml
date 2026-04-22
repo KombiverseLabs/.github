@@ -31,10 +31,9 @@ on:
         type: boolean
         default: false
       image-tag:
-        description: "Docker image tag to deploy"
-        required: false
+        description: "Docker image tag to deploy. Must be explicit; latest is rejected."
+        required: true
         type: string
-        default: "latest"
       image-repository:
         description: "Full image repository (e.g. ghcr.io/kombiverselabs/kombify-blog)"
         required: true
@@ -243,7 +242,12 @@ jobs:
           CI: "true"
         run: |
           SERVICE_ID="${{ steps.resolve.outputs.service_id }}"
-          IMAGE_URL="${{ inputs.image-repository }}:${{ inputs.image-tag }}"
+          IMAGE_TAG="${{ inputs.image-tag }}"
+          if [ -z "$IMAGE_TAG" ] || [ "$IMAGE_TAG" = "latest" ]; then
+            echo "::error::image-tag must be explicit and must not be latest"
+            exit 1
+          fi
+          IMAGE_URL="${{ inputs.image-repository }}:${IMAGE_TAG}"
 
           echo "Deploying ${IMAGE_URL} to service ${SERVICE_ID}"
 

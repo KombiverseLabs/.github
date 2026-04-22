@@ -49,10 +49,10 @@ on:
         type: boolean
         default: false
       image-tag:
-        description: "Docker image tag to deploy"
+        description: "Docker image tag to deploy. Required when image-repository is set; latest is rejected."
         required: false
         type: string
-        default: "latest"
+        default: ""
       image-repository:
         description: "Full GHCR image repository"
         required: false
@@ -296,13 +296,17 @@ jobs:
           IMAGE_TAG="${{ inputs.image-tag }}"
           IMAGE_URL=""
           if [ -n "$IMAGE_REPO" ]; then
+            if [ -z "$IMAGE_TAG" ] || [ "$IMAGE_TAG" = "latest" ]; then
+              echo "::error::image-tag must be an explicit immutable tag when image-repository is set; refusing '${IMAGE_TAG:-<empty>}'"
+              exit 1
+            fi
             IMAGE_URL="${IMAGE_REPO}:${IMAGE_TAG}"
             BODY=$(jq -cn --arg clearCache "$CLEAR_CACHE" --arg imageUrl "$IMAGE_URL" \
               '{clearCache: $clearCache, imageUrl: $imageUrl}')
             echo "Deploying image: ${IMAGE_URL}"
           else
             BODY=$(jq -cn --arg clearCache "$CLEAR_CACHE" '{clearCache: $clearCache}')
-            echo "Deploying latest build (no image override)"
+            echo "Deploying current Render service image (no image override)"
           fi
 
           is_retryable_status() {
@@ -671,13 +675,17 @@ jobs:
           IMAGE_TAG="${{ inputs.image-tag }}"
           IMAGE_URL=""
           if [ -n "$IMAGE_REPO" ]; then
+            if [ -z "$IMAGE_TAG" ] || [ "$IMAGE_TAG" = "latest" ]; then
+              echo "::error::image-tag must be an explicit immutable tag when image-repository is set; refusing '${IMAGE_TAG:-<empty>}'"
+              exit 1
+            fi
             IMAGE_URL="${IMAGE_REPO}:${IMAGE_TAG}"
             BODY=$(jq -cn --arg clearCache "$CLEAR_CACHE" --arg imageUrl "$IMAGE_URL" \
               '{clearCache: $clearCache, imageUrl: $imageUrl}')
             echo "Deploying image: ${IMAGE_URL}"
           else
             BODY=$(jq -cn --arg clearCache "$CLEAR_CACHE" '{clearCache: $clearCache}')
-            echo "Deploying latest build (no image override)"
+            echo "Deploying current Render service image (no image override)"
           fi
 
           is_retryable_status() {
