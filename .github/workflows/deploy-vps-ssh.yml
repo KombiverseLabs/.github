@@ -96,8 +96,11 @@ on:
         default: ""
     secrets:
       DOPPLER_TOKEN:
-        description: "Doppler token with access to VPS SSH credentials"
+        description: "Doppler token with access to VPS SSH credentials project"
         required: true
+      DOPPLER_TOKEN_RUNTIME:
+        description: "Optional Doppler token for runtime-env project (falls back to DOPPLER_TOKEN)"
+        required: false
 
 # Kritischer Pfad: deploy (10) = 10 min max
 
@@ -130,6 +133,7 @@ jobs:
         shell: bash
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN_RUNTIME: ${{ secrets.DOPPLER_TOKEN_RUNTIME }}
         run: |
           set -euo pipefail
 
@@ -137,6 +141,9 @@ jobs:
             echo "::error::DOPPLER_TOKEN is empty"
             exit 1
           fi
+
+          # DOPPLER_TOKEN_RUNTIME is optional; falls back to DOPPLER_TOKEN when not set
+          RUNTIME_TOKEN="${DOPPLER_TOKEN_RUNTIME:-$DOPPLER_TOKEN}"
 
           doppler_secret() {
             local secret_name="$1"
@@ -210,7 +217,7 @@ jobs:
               --no-file \
               --project "$RUNTIME_ENV_PROJECT" \
               --config "$RUNTIME_ENV_CONFIG" \
-              --token "$DOPPLER_TOKEN" \
+              --token "$RUNTIME_TOKEN" \
               --no-read-env > "$DOPPLER_ENV_FILE"
 
             scp -i "$SSH_KEY_FILE" \
