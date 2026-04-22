@@ -31,7 +31,7 @@ on:
         type: string
         default: ''
       doppler-runtime-env-secret-id:
-        description: 'Optional BuildKit secret id populated with a shell export file containing all Doppler secrets for baking runtime env into the image.'
+        description: 'Deprecated legacy BuildKit secret file input. Do not use for runtime secrets; inject runtime env at the deploy target.'
         required: false
         type: string
         default: ''
@@ -55,6 +55,16 @@ on:
         required: false
         type: string
         default: 'blacksmith-4vcpu-ubuntu-2204'
+      checkout-ref:
+        description: 'Optional git ref or SHA to checkout before building. Defaults to the workflow commit.'
+        required: false
+        type: string
+        default: ''
+      image-sha:
+        description: 'Optional full commit SHA used for the immutable git-* image tag. Defaults to the workflow commit.'
+        required: false
+        type: string
+        default: ''
     secrets:
       GH_PAT:
         required: false
@@ -75,16 +85,8 @@ on:
         value: ${{ jobs.build.outputs.digest }}
 
 jobs:
-  pick-runner:
-    name: Pick runner
-    uses: KombiverseLabs/.github/.github/workflows/pick-runner-v2.yml@main
-    with:
-      preferred: ${{ inputs.runner || 'blacksmith-4vcpu-ubuntu-2204' }}
-    secrets: inherit
-
   build:
-    needs: [pick-runner]
-    runs-on: ${{ needs.pick-runner.outputs.runner }}
+    runs-on: ${{ inputs.runner || 'blacksmith-4vcpu-ubuntu-2204' }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -98,6 +100,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout-ref != '' && inputs.checkout-ref || github.sha }}
 
       - name: Install Doppler CLI
         if: inputs.doppler-build-secrets != '' || inputs.doppler-runtime-env-secret-id != ''
@@ -258,7 +262,7 @@ jobs:
         with:
           images: ${{ steps.image-name.outputs.name }}
           tags: |
-            type=raw,value=${{ inputs.tag-prefix }}git-${{ github.sha }}
+            type=raw,value=${{ inputs.tag-prefix }}git-${{ inputs.image-sha != '' && inputs.image-sha || github.sha }}
             type=sha,prefix=${{ inputs.tag-prefix }}
             type=raw,value=${{ inputs.tag-prefix }}latest
             type=ref,event=branch,prefix=${{ inputs.tag-prefix }}
@@ -337,7 +341,7 @@ jobs:
           echo "### Docker Image Built" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Image:** \`${{ steps.image-name.outputs.name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Runner:** \`${{ needs.pick-runner.outputs.runner }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Runner:** \`${{ inputs.runner || 'blacksmith-4vcpu-ubuntu-2204' }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
