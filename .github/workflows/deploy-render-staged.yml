@@ -186,7 +186,7 @@ jobs:
           }
           base_url = f"https://api.render.com/v1/services/{service_id}/env-vars"
 
-          def request(method: str, url: str, body: dict | None = None) -> object:
+          def request(method: str, url: str, body: object | None = None) -> object:
               payload = json.dumps(body).encode("utf-8") if body is not None else None
               max_attempts = 6
               retryable = {429, 500, 502, 503, 504}
@@ -204,6 +204,8 @@ jobs:
                       if exc.code in retryable and attempt < max_attempts:
                           retry_after = (exc.headers.get("Retry-After") or "").strip()
                           wait_seconds = int(retry_after) if retry_after.isdigit() else min(2 ** attempt, 20)
+                          if exc.code == 429:
+                              wait_seconds = max(wait_seconds, min(5 * attempt, 30))
                           print(
                               f"Render API HTTP {exc.code} on {method} {url}; retry in {wait_seconds}s "
                               f"(attempt {attempt}/{max_attempts})"
@@ -236,34 +238,47 @@ jobs:
           else:
               current_items = []
 
-          current_keys = {
-              item.get("envVarKey") or item.get("key") or item.get("name")
-              for item in current_items
-              if isinstance(item, dict)
-          }
-          current_keys.discard(None)
+          current_values: dict[str, str] = {}
+          for item in current_items:
+              if not isinstance(item, dict):
+                  continue
+              env_var = item.get("envVar") if isinstance(item.get("envVar"), dict) else item
+              key = env_var.get("key") or env_var.get("envVarKey") or env_var.get("name")
+              value = env_var.get("value")
+              if key is not None and value is not None:
+                  current_values[str(key)] = str(value)
 
           # Render rejects empty-string env vars with HTTP 400
           # ("must provide a value or generateValue must be set to true").
           # Optional Doppler secrets (e.g. SERVICE_AUTH_SECRET_NEXT during a
-          # non-rotation window) legitimately carry empty strings -- skip the
-          # PUT, but still treat the key as "desired" so any pre-existing
-          # Render value is not deleted by the stale-key sweep below.
+          # non-rotation window) legitimately carry empty strings -- preserve
+          # any existing Render value for those keys when the API returns it.
+          payload: list[dict[str, str]] = []
+          preserved_empty_keys = 0
+          omitted_empty_keys = 0
           for key, value in desired.items():
               if value is None or str(value) == "":
+                  existing_value = current_values.get(str(key))
+                  if existing_value:
+                      payload.append({"key": str(key), "value": existing_value})
+                      preserved_empty_keys += 1
+                  else:
+                      omitted_empty_keys += 1
                   continue
-              encoded_key = urllib.parse.quote(str(key), safe="")
-              request("PUT", f"{base_url}/{encoded_key}", {"value": str(value)})
+              payload.append({"key": str(key), "value": str(value)})
 
-          stale_keys = sorted(current_keys - set(desired))
-          if not preserve_extras:
+          stale_keys = sorted(set(current_values) - set(desired))
+          if preserve_extras:
               for key in stale_keys:
-                  encoded_key = urllib.parse.quote(str(key), safe="")
-                  request("DELETE", f"{base_url}/{encoded_key}")
+                  payload.append({"key": key, "value": current_values[key]})
+
+          request("PUT", base_url, payload)
 
           print(
-              f"Synced {len(desired)} Doppler env vars to Render service {service_id}"
-              + (f"; removed {len(stale_keys)} stale direct vars" if not preserve_extras else "; preserved extra direct vars")
+              f"Synced {len(payload)} Render env vars from {len(desired)} Doppler vars to service {service_id}"
+              + (f"; removed {len(stale_keys)} stale direct vars" if not preserve_extras else f"; preserved {len(stale_keys)} extra direct vars")
+              + (f"; preserved {preserved_empty_keys} empty Doppler keys from existing Render values" if preserved_empty_keys else "")
+              + (f"; omitted {omitted_empty_keys} empty Doppler keys" if omitted_empty_keys else "")
           )
           PY
 
@@ -452,7 +467,7 @@ jobs:
           }
           base_url = f"https://api.render.com/v1/services/{service_id}/env-vars"
 
-          def request(method: str, url: str, body: dict | None = None) -> object:
+          def request(method: str, url: str, body: object | None = None) -> object:
               payload = json.dumps(body).encode("utf-8") if body is not None else None
               max_attempts = 6
               retryable = {429, 500, 502, 503, 504}
@@ -470,6 +485,8 @@ jobs:
                       if exc.code in retryable and attempt < max_attempts:
                           retry_after = (exc.headers.get("Retry-After") or "").strip()
                           wait_seconds = int(retry_after) if retry_after.isdigit() else min(2 ** attempt, 20)
+                          if exc.code == 429:
+                              wait_seconds = max(wait_seconds, min(5 * attempt, 30))
                           print(
                               f"Render API HTTP {exc.code} on {method} {url}; retry in {wait_seconds}s "
                               f"(attempt {attempt}/{max_attempts})"
@@ -502,34 +519,47 @@ jobs:
           else:
               current_items = []
 
-          current_keys = {
-              item.get("envVarKey") or item.get("key") or item.get("name")
-              for item in current_items
-              if isinstance(item, dict)
-          }
-          current_keys.discard(None)
+          current_values: dict[str, str] = {}
+          for item in current_items:
+              if not isinstance(item, dict):
+                  continue
+              env_var = item.get("envVar") if isinstance(item.get("envVar"), dict) else item
+              key = env_var.get("key") or env_var.get("envVarKey") or env_var.get("name")
+              value = env_var.get("value")
+              if key is not None and value is not None:
+                  current_values[str(key)] = str(value)
 
           # Render rejects empty-string env vars with HTTP 400
           # ("must provide a value or generateValue must be set to true").
           # Optional Doppler secrets (e.g. SERVICE_AUTH_SECRET_NEXT during a
-          # non-rotation window) legitimately carry empty strings -- skip the
-          # PUT, but still treat the key as "desired" so any pre-existing
-          # Render value is not deleted by the stale-key sweep below.
+          # non-rotation window) legitimately carry empty strings -- preserve
+          # any existing Render value for those keys when the API returns it.
+          payload: list[dict[str, str]] = []
+          preserved_empty_keys = 0
+          omitted_empty_keys = 0
           for key, value in desired.items():
               if value is None or str(value) == "":
+                  existing_value = current_values.get(str(key))
+                  if existing_value:
+                      payload.append({"key": str(key), "value": existing_value})
+                      preserved_empty_keys += 1
+                  else:
+                      omitted_empty_keys += 1
                   continue
-              encoded_key = urllib.parse.quote(str(key), safe="")
-              request("PUT", f"{base_url}/{encoded_key}", {"value": str(value)})
+              payload.append({"key": str(key), "value": str(value)})
 
-          stale_keys = sorted(current_keys - set(desired))
-          if not preserve_extras:
+          stale_keys = sorted(set(current_values) - set(desired))
+          if preserve_extras:
               for key in stale_keys:
-                  encoded_key = urllib.parse.quote(str(key), safe="")
-                  request("DELETE", f"{base_url}/{encoded_key}")
+                  payload.append({"key": key, "value": current_values[key]})
+
+          request("PUT", base_url, payload)
 
           print(
-              f"Synced {len(desired)} Doppler env vars to Render service {service_id}"
-              + (f"; removed {len(stale_keys)} stale direct vars" if not preserve_extras else "; preserved extra direct vars")
+              f"Synced {len(payload)} Render env vars from {len(desired)} Doppler vars to service {service_id}"
+              + (f"; removed {len(stale_keys)} stale direct vars" if not preserve_extras else f"; preserved {len(stale_keys)} extra direct vars")
+              + (f"; preserved {preserved_empty_keys} empty Doppler keys from existing Render values" if preserved_empty_keys else "")
+              + (f"; omitted {omitted_empty_keys} empty Doppler keys" if omitted_empty_keys else "")
           )
           PY
 
