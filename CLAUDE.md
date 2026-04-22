@@ -3,6 +3,16 @@
 ## Task Management
 **Tools:** Doppler (Secrets), Beads (`bd list/create/update/sync`) für Issue-Tracking.
 
+## Docs Impact + Beads
+
+Shared workflow changes are docs-impact relevant by default because they affect CI/CD, deployment, runtime configuration, or validation behavior.
+
+- Follow `../kombify Core/standards/DOCS_STANDARDS.md` Section 8 for every workflow, action, script, or deployment-rule change.
+- Update the owning Tier 2 docs/standards in the same change when workflow behavior changes.
+- Use `docs-impact: none` only when the change is purely mechanical and has no operator/developer-facing behavior.
+- If docs must be deferred, create or update a Beads issue in the owning repo and mention it in the handoff.
+- AI/Workers AI may draft workflow documentation or classify impact, but reviewed git changes remain the source of truth.
+
 ## Shared Workflows
 
 | Workflow | Purpose |
