@@ -3,10 +3,14 @@ name: Guard - No Zitadel (Reusable)
 on:
   workflow_call:
 
+permissions:
+  contents: read
+
 jobs:
   guard:
     name: Check no Zitadel references
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
 
