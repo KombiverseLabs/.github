@@ -5,14 +5,14 @@ name: GHCR Cleanup
 
 on:
   schedule:
-    # Every Sunday at 03:00 UTC
-    - cron: '0 3 * * 0'
+    # Daily at 03:00 UTC
+    - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
       keep-versions:
         description: 'Number of recent tagged versions to keep per package'
         required: false
-        default: '5'
+        default: '3'
         type: string
       dry-run:
         description: 'If true, only list what would be deleted'
@@ -34,7 +34,7 @@ jobs:
 
     env:
       ORG: KombiverseLabs
-      KEEP_VERSIONS: ${{ inputs.keep-versions || '5' }}
+      KEEP_VERSIONS: ${{ inputs.keep-versions || '3' }}
       DRY_RUN: ${{ inputs.dry-run || 'false' }}
 
     steps:
