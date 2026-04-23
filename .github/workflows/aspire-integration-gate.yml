@@ -27,16 +27,8 @@ on:
         required: false
 
 jobs:
-  pick-runner:
-    name: Pick runner
-    uses: KombiverseLabs/.github/.github/workflows/pick-runner-v2.yml@main
-    with:
-      preferred: ${{ inputs.runner || 'kombi' }}
-    secrets: inherit
-
   aspire-gate:
-    needs: [pick-runner]
-    runs-on: ${{ needs.pick-runner.outputs.runner }}
+    runs-on: ${{ inputs.runner || 'kombi' }}
     timeout-minutes: 5
     permissions:
       contents: read
