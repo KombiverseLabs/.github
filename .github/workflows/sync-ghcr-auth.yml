@@ -20,6 +20,14 @@ on:
         description: 'Optional bootstrap token from GitHub Secrets. When omitted, the workflow falls back to github.token.'
         required: false
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   sync:
     name: Sync GHCR Auth

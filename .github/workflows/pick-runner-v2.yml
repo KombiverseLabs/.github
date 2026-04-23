@@ -33,6 +33,13 @@ on:
         description: 'The selected runner label to use in subsequent jobs'
         value: ${{ jobs.pick.outputs.runner }}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   pick:
     name: Select runner

@@ -64,6 +64,14 @@ on:
 
 # Kritischer Pfad: deploy (15) = 15 min max
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   deploy:
     name: Deploy

@@ -104,6 +104,13 @@ on:
 
 # Kritischer Pfad: deploy (10) = 10 min max
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   deploy:
     name: "${{ inputs.service-name }} → VPS"

@@ -98,6 +98,13 @@ on:
         description: "Optional Doppler service token for runtime env config sync"
         required: false
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   deploy-staging:
     name: "${{ inputs.service-name }} → Staging"
