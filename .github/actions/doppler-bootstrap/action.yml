@@ -13,7 +13,7 @@ description: |
 inputs:
   doppler-token:
     description: |
-      Doppler service token. Pass the value `${{ secrets.DOPPLER_TOKEN }}` (or any other
+      Doppler service token. Pass a Doppler service token from your workflow secrets (or any other
       secret name) — never inline. The action masks the value before any
       command runs.
     required: true
