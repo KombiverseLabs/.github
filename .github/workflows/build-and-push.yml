@@ -111,19 +111,20 @@ jobs:
         with:
           ref: ${{ inputs.checkout-ref != '' && inputs.checkout-ref || github.sha }}
 
-      - name: Install Doppler CLI
+      - name: Checkout shared composite actions
         if: inputs.doppler-build-secrets != '' || inputs.doppler-runtime-env-secret-id != ''
-        run: |
-          if command -v doppler >/dev/null 2>&1; then
-            exit 0
-          fi
-          curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
-            'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' \
-            | sudo gpg --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] \
-            https://packages.doppler.com/public/cli/deb/debian any-version main" \
-            | sudo tee /etc/apt/sources.list.d/doppler-cli.list
-          sudo apt-get update -qq && sudo apt-get install -y doppler
+        uses: actions/checkout@v4
+        with:
+          repository: KombiverseLabs/.github
+          ref: main
+          path: .gha-shared
+          token: ${{ secrets.GH_PAT != '' && secrets.GH_PAT || github.token }}
+
+      - name: Doppler bootstrap (install + verify token)
+        if: inputs.doppler-build-secrets != '' || inputs.doppler-runtime-env-secret-id != ''
+        uses: ./.gha-shared/.github/actions/doppler-bootstrap
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Resolve Doppler build secrets
         if: inputs.doppler-build-secrets != ''

@@ -1,0 +1,152 @@
+name: release-please
+# Reusable workflow that wraps googleapis/release-please-action for kombify
+# repos. Generates SemVer bumps, CHANGELOG.md updates, and tagged releases via
+# Conventional Commits.
+#
+# Standard reference:
+#   - kombify Core/standards/MODULAR-RELEASE-STRATEGY.md (Multi-Module manifest)
+#   - kombify Core/standards/SAAS-CHANGELOG-CONVENTION.md (Format)
+#   - kombify Core/standards/RELEASE-PROCESS-STANDARD.md (OSS-binding, SemVer + Keep-a-Changelog)
+#
+# Caller usage (mono repo):
+#   on:
+#     push:
+#       branches: [main]
+#   permissions:
+#     contents: write       # release-please opens PRs and creates tags
+#     pull-requests: write
+#   jobs:
+#     release-please:
+#       uses: KombiverseLabs/.github/.github/workflows/release-please.yml@main
+#       with:
+#         release-type: node     # or go, simple, python, dotnet
+#         package-name: kombify-cloud
+#
+# Caller usage (multi-module repo with manifest):
+#   jobs:
+#     release-please:
+#       uses: KombiverseLabs/.github/.github/workflows/release-please.yml@main
+#       with:
+#         config-file: release-please-config.json
+#         manifest-file: .release-please-manifest.json
+
+on:
+  workflow_call:
+    inputs:
+      release-type:
+        description: |
+          release-please release-type. Used only when no manifest+config are
+          provided. Examples: node, go, simple, python, dotnet, terraform-module.
+        required: false
+        type: string
+        default: ""
+      package-name:
+        description: |
+          Package name for single-package mode. Becomes the tag prefix
+          (`<package-name>-vX.Y.Z`) when using a manifest, or the GitHub
+          release title in single-package mode.
+        required: false
+        type: string
+        default: ""
+      config-file:
+        description: |
+          Path to release-please-config.json (multi-module mode). When set,
+          `release-type` is ignored — the config defines packages.
+        required: false
+        type: string
+        default: "release-please-config.json"
+      manifest-file:
+        description: Path to .release-please-manifest.json (multi-module mode).
+        required: false
+        type: string
+        default: ".release-please-manifest.json"
+      target-branch:
+        description: Branch release-please tracks. Defaults to the workflow ref.
+        required: false
+        type: string
+        default: ""
+      runner:
+        description: Runner label override.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      RELEASE_PLEASE_TOKEN:
+        description: |
+          GitHub PAT with `contents: write` and `pull-requests: write`. Required
+          when the default GITHUB_TOKEN cannot trigger downstream workflows
+          (e.g., the build-and-push.yml triggered by tag push). Optional —
+          falls back to GITHUB_TOKEN.
+        required: false
+    outputs:
+      releases_created:
+        description: |
+          "true" when one or more releases (tags) were created in this run.
+          Use this as `if:` gate on downstream build/deploy jobs.
+        value: ${{ jobs.release-please.outputs.releases_created }}
+      paths_released:
+        description: |
+          JSON array of package paths that were released. Empty array when
+          releases_created is false. Use with `fromJson()` in matrix strategies.
+        value: ${{ jobs.release-please.outputs.paths_released }}
+      tag_name:
+        description: |
+          Single tag name for mono-package mode. Empty for multi-module mode —
+          use paths_released + per-package outputs there.
+        value: ${{ jobs.release-please.outputs.tag_name }}
+
+concurrency:
+  group: release-please-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-2vcpu-ubuntu-2204') }}
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      paths_released: ${{ steps.release.outputs.paths_released }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${{ inputs.release-type }}" ] && [ ! -f "${{ inputs.config-file }}" ]; then
+            echo "::error::Either inputs.release-type (single-package mode) or a release-please-config.json (multi-module mode) is required." >&2
+            exit 1
+          fi
+
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          release-type: ${{ inputs.release-type }}
+          package-name: ${{ inputs.package-name }}
+          config-file: ${{ inputs.config-file }}
+          manifest-file: ${{ inputs.manifest-file }}
+          target-branch: ${{ inputs.target-branch }}
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### release-please"
+            echo ""
+            echo "**Releases created:** ${{ steps.release.outputs.releases_created }}"
+            if [ -n "${{ steps.release.outputs.tag_name }}" ]; then
+              echo "**Tag:** \`${{ steps.release.outputs.tag_name }}\`"
+            fi
+            if [ -n "${{ steps.release.outputs.paths_released }}" ]; then
+              echo "**Paths released:** \`${{ steps.release.outputs.paths_released }}\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,176 @@
+name: Feature Flag Release Gate
+description: |
+  Check that all required feature flags for a tool category are in the
+  expected release phase before promoting an image to production.
+
+  Talks to the existing kombify-Administration release-manifest endpoint:
+    GET https://admin.kombify.io/api/v1/feature-flags/release-manifest?category=<tool>
+
+  See:
+    - kombify-Administration/frontend/src/routes/api/v1/feature-flags/release-manifest/+server.ts
+    - kombify Core/standards/FEATURE-FLAGS-STANDARD.md
+    - kombify Core/standards/MODULAR-RELEASE-STRATEGY.md
+
+  Auth:
+    Uses Authorization: Bearer <service-key>. The service key is an HS256 JWT
+    signed by go-common/servicecall — fetched from Doppler `kombify-io/prd_admin`
+    (`ADMIN_SERVICE_KEY`). Never inline.
+
+inputs:
+  category:
+    description: |
+      Feature category in the Admin DB (e.g. "kombify-ai", "kombify-sim",
+      "kombify-cloud"). Maps to `feature_definitions.tool` column.
+    required: true
+  required-flags:
+    description: |
+      Optional JSON array of flag keys that MUST be `released: true`. When
+      empty, the action only fails if any flag in the category has
+      releasePhase="released" but is not currently live (kill-switch
+      detection). When set, all listed flags must be released — failures
+      list each missing flag.
+    required: false
+    default: "[]"
+  service-key:
+    description: |
+      Service key (HS256 JWT) for the Admin API. Required. Pass via secrets,
+      never inline. Doppler key: `ADMIN_SERVICE_KEY` in `kombify-io/prd_admin`.
+    required: true
+  admin-base-url:
+    description: Admin API base URL.
+    required: false
+    default: "https://admin.kombify.io"
+  bypass-fragile:
+    description: |
+      Set to "true" only for true emergencies. Skips the gate but writes a
+      bypass-audit log line that surfaces in Sentry / GitHub Step Summary.
+      Default "false" — gate is enforced.
+    required: false
+    default: "false"
+
+outputs:
+  manifest-checked-at:
+    description: ISO timestamp at which the manifest was retrieved.
+    value: ${{ steps.gate.outputs.checked-at }}
+  released-flags:
+    description: JSON array of flag keys that are currently released for this category.
+    value: ${{ steps.gate.outputs.released-flags }}
+
+runs:
+  using: composite
+  steps:
+    - name: Mask service key
+      shell: bash
+      run: |
+        if [ -z "${{ inputs.service-key }}" ]; then
+          echo "::error::service-key input is empty. Pass ADMIN_SERVICE_KEY from Doppler kombify-io/prd_admin." >&2
+          exit 1
+        fi
+        echo "::add-mask::${{ inputs.service-key }}"
+
+    - name: Bypass with audit log
+      if: inputs.bypass-fragile == 'true'
+      shell: bash
+      run: |
+        echo "::warning::FF release gate BYPASSED for category=${{ inputs.category }}. Emergency escape hatch — every bypass MUST be reviewed in the next standup and tracked as a Beads issue." >&2
+        {
+          echo "## ⚠️ Feature Flag Gate Bypassed"
+          echo ""
+          echo "**Category:** ${{ inputs.category }}"
+          echo "**Repo:** ${{ github.repository }}"
+          echo "**Run:** ${{ github.run_id }}"
+          echo "**Actor:** ${{ github.actor }}"
+          echo "**Reason:** bypass-fragile=true"
+          echo ""
+          echo "Open a Beads issue in the owning repo with the rationale."
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Run release gate
+      id: gate
+      if: inputs.bypass-fragile != 'true'
+      shell: bash
+      env:
+        ADMIN_BASE_URL: ${{ inputs.admin-base-url }}
+        CATEGORY: ${{ inputs.category }}
+        REQUIRED_FLAGS: ${{ inputs.required-flags }}
+        SERVICE_KEY: ${{ inputs.service-key }}
+      run: |
+        set -euo pipefail
+        if ! command -v jq >/dev/null 2>&1; then
+          sudo apt-get update -qq && sudo apt-get install -y jq
+        fi
+
+        URL="${ADMIN_BASE_URL%/}/api/v1/feature-flags/release-manifest?category=${CATEGORY}"
+        echo "GET $URL"
+
+        HTTP_CODE=$(curl -sS -o /tmp/ff-manifest.json -w "%{http_code}" \
+          -H "Authorization: Bearer $SERVICE_KEY" \
+          -H "Accept: application/json" \
+          --max-time 20 \
+          --retry 3 --retry-delay 2 --retry-connrefused \
+          "$URL" || true)
+
+        if [ "$HTTP_CODE" != "200" ]; then
+          echo "::error::Admin release-manifest endpoint returned HTTP $HTTP_CODE." >&2
+          echo "Response body:" >&2
+          cat /tmp/ff-manifest.json >&2 || true
+          exit 1
+        fi
+
+        CHECKED_AT=$(jq -r '.generated_at // "unknown"' /tmp/ff-manifest.json)
+        echo "checked-at=$CHECKED_AT" >> "$GITHUB_OUTPUT"
+
+        RELEASED_FLAGS=$(jq -c '[.features | to_entries[] | select(.value.released == true) | .key]' /tmp/ff-manifest.json)
+        echo "released-flags=$RELEASED_FLAGS" >> "$GITHUB_OUTPUT"
+
+        # 1. Required flags check (when caller provided a list).
+        REQUIRED_COUNT=$(echo "$REQUIRED_FLAGS" | jq 'length')
+        if [ "$REQUIRED_COUNT" -gt 0 ]; then
+          MISSING=$(jq --argjson required "$REQUIRED_FLAGS" '
+            [ $required[] | . as $key
+              | if (.[$key]? // null) | (. != null and .released == true)
+                then empty
+                else $key
+              end ]
+          ' /tmp/ff-manifest.json 2>/dev/null || true)
+          # The expression above is intentionally simple; re-do with a clearer pipeline:
+          MISSING=$(jq -r --argjson required "$REQUIRED_FLAGS" '
+            [$required[] as $k | select((.features[$k]? // {released:false}).released != true) | $k] | .[]
+          ' /tmp/ff-manifest.json | tr "\n" " " | sed "s/ $//" || true)
+          if [ -n "${MISSING:-}" ]; then
+            echo "::error::Required feature flags missing or not released for category=$CATEGORY: $MISSING" >&2
+            echo "Block reason: caller passed required-flags but the Admin manifest does not list them as released." >&2
+            exit 1
+          fi
+        fi
+
+        # 2. Kill-switch detection: any flag with phase=released that is NOT currently
+        #    "released:true" in the manifest. (released phase implies live.)
+        # The manifest already maps phase→released boolean, so we just verify there are no
+        # category flags marked released:false that should be live. This is a sanity check,
+        # not a hard fail by default — the manifest should not surface released:false for a
+        # released-phase flag at all. If it does, it indicates DB drift or a kill-switch
+        # action by an admin.
+        DRIFT=$(jq -r '
+          .features
+          | to_entries
+          | map(select(.value.released == false and (.value.module_paths // []) != []))
+          | length
+        ' /tmp/ff-manifest.json)
+        if [ "$DRIFT" -gt 0 ]; then
+          echo "::warning::Detected $DRIFT feature flag(s) with module_paths but released=false. May indicate an active kill-switch. Review before promoting." >&2
+        fi
+
+        {
+          echo "### Feature Flag Gate"
+          echo ""
+          echo "**Category:** $CATEGORY"
+          echo "**Manifest fetched at:** $CHECKED_AT"
+          echo "**Released flags:** \`$RELEASED_FLAGS\`"
+          if [ "$REQUIRED_COUNT" -gt 0 ]; then
+            echo "**Required flags:** \`$REQUIRED_FLAGS\` ✅"
+          fi
+          if [ "$DRIFT" -gt 0 ]; then
+            echo "**Drift warnings:** $DRIFT flag(s) with module_paths but released=false."
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"

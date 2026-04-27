@@ -1,0 +1,145 @@
+name: Doppler Bootstrap
+description: |
+  Install the Doppler CLI (cached), validate the provided token, and optionally
+  verify that a target Doppler project/config is readable.
+
+  Replaces the duplicated 35-line apt-install pattern that lives in
+  build-and-push.yml, kombify-AI/deploy.yml, kombify-Cloud/deploy.yml and
+  several other workflows. Catches Doppler-Sync race conditions early by
+  doing a `doppler me` health-check before any secret read.
+
+  Standard reference: kombify Core/standards/DEPLOYMENT-STANDARD.md §3.2
+
+inputs:
+  doppler-token:
+    description: |
+      Doppler service token. Pass `${{ secrets.DOPPLER_TOKEN }}` (or any other
+      secret name) — never inline. The action masks the value before any
+      command runs.
+    required: true
+  validate-project:
+    description: |
+      Optional Doppler project to validate readability against. When set
+      together with `validate-config`, the action runs `doppler secrets
+      --only-names` against that project/config and fails loudly if the
+      token cannot list secrets.
+    required: false
+    default: ""
+  validate-config:
+    description: Optional Doppler config to validate (paired with `validate-project`).
+    required: false
+    default: ""
+  cache-dir:
+    description: Directory to cache the Doppler CLI binary between runs.
+    required: false
+    default: ~/.cache/doppler
+
+outputs:
+  doppler-version:
+    description: Version of the Doppler CLI that ended up installed.
+    value: ${{ steps.version.outputs.version }}
+  doppler-config-readable:
+    description: |
+      "true" when validate-project + validate-config were provided AND the
+      token could list secrets there. "false" if validation was skipped or
+      explicitly disabled. Validation failures fail the action — they do not
+      surface here as "false".
+    value: ${{ steps.validate.outputs.config-readable }}
+
+runs:
+  using: composite
+  steps:
+    - name: Mask Doppler token
+      shell: bash
+      run: |
+        if [ -z "${{ inputs.doppler-token }}" ]; then
+          echo "::error::doppler-token input is empty. Pass a Doppler service token." >&2
+          exit 1
+        fi
+        echo "::add-mask::${{ inputs.doppler-token }}"
+
+    - name: Restore Doppler CLI cache
+      id: cache-restore
+      uses: actions/cache@v4
+      with:
+        path: ${{ inputs.cache-dir }}
+        key: doppler-cli-${{ runner.os }}-${{ runner.arch }}-v1
+
+    - name: Install Doppler CLI (idempotent)
+      shell: bash
+      run: |
+        set -euo pipefail
+        if command -v doppler >/dev/null 2>&1; then
+          echo "Doppler CLI already on PATH: $(command -v doppler)"
+          exit 0
+        fi
+
+        CACHE_DIR="${{ inputs.cache-dir }}"
+        CACHE_DIR="${CACHE_DIR/#\~/$HOME}"
+        mkdir -p "$CACHE_DIR"
+
+        if [ -x "$CACHE_DIR/doppler" ]; then
+          echo "Restoring Doppler CLI from cache: $CACHE_DIR/doppler"
+          sudo install -m 0755 "$CACHE_DIR/doppler" /usr/local/bin/doppler
+          exit 0
+        fi
+
+        echo "Installing Doppler CLI from official APT repository"
+        sudo mkdir -p /usr/share/keyrings
+        if [ ! -f /usr/share/keyrings/doppler-archive-keyring.gpg ]; then
+          curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
+            'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' \
+            | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
+        fi
+        if [ ! -f /etc/apt/sources.list.d/doppler-cli.list ]; then
+          echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] https://packages.doppler.com/public/cli/deb/debian any-version main" \
+            | sudo tee /etc/apt/sources.list.d/doppler-cli.list >/dev/null
+        fi
+        sudo apt-get update -qq
+        sudo apt-get install -y doppler
+
+        cp "$(command -v doppler)" "$CACHE_DIR/doppler"
+
+    - name: Verify Doppler token (doppler me)
+      shell: bash
+      env:
+        DOPPLER_TOKEN: ${{ inputs.doppler-token }}
+      run: |
+        set -euo pipefail
+        if ! doppler me --json >/tmp/doppler-me.json 2>/tmp/doppler-me.err; then
+          echo "::error::Doppler token failed validation (doppler me). The token may have been rotated or scoped to a different project/config. See kombify Core CLAUDE.md §1 for the canonical Doppler project list." >&2
+          cat /tmp/doppler-me.err >&2 || true
+          exit 1
+        fi
+        echo "Doppler token verified."
+
+    - name: Validate Doppler project/config readability
+      id: validate
+      shell: bash
+      env:
+        DOPPLER_TOKEN: ${{ inputs.doppler-token }}
+        VALIDATE_PROJECT: ${{ inputs.validate-project }}
+        VALIDATE_CONFIG: ${{ inputs.validate-config }}
+      run: |
+        set -euo pipefail
+        if [ -z "$VALIDATE_PROJECT" ] || [ -z "$VALIDATE_CONFIG" ]; then
+          echo "config-readable=false" >> "$GITHUB_OUTPUT"
+          echo "Skipping project/config readability check (validate-project or validate-config not set)."
+          exit 0
+        fi
+        if ! doppler secrets --project "$VALIDATE_PROJECT" --config "$VALIDATE_CONFIG" --only-names >/tmp/doppler-list.txt 2>/tmp/doppler-list.err; then
+          echo "::error::Cannot list secrets in $VALIDATE_PROJECT/$VALIDATE_CONFIG. Token may be scoped to a different project. See kombify Core CLAUDE.md for the project matrix." >&2
+          cat /tmp/doppler-list.err >&2 || true
+          exit 1
+        fi
+        SECRET_COUNT=$(wc -l < /tmp/doppler-list.txt | tr -d ' ')
+        echo "Doppler config $VALIDATE_PROJECT/$VALIDATE_CONFIG readable ($SECRET_COUNT secrets visible)."
+        echo "config-readable=true" >> "$GITHUB_OUTPUT"
+
+    - name: Capture Doppler version
+      id: version
+      shell: bash
+      run: |
+        VERSION=$(doppler --version 2>/dev/null | head -1)
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "Doppler CLI: $VERSION"
