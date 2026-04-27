@@ -1,0 +1,287 @@
+name: Nightly Full Smoke (non-blocking)
+# Reusable workflow: runs the heavy E2E suite (Playwright cross-browser,
+# visual regression) on a schedule. NEVER blocks a deploy. Failures are
+# reported to Sentry + an auto-issue.
+#
+# Standard reference: kombify Core/standards/DEPLOYMENT-STANDARD.md §5.2
+#
+# Caller usage (typical, in repo's .github/workflows/nightly-smoke.yml):
+#   on:
+#     schedule: [{cron: '0 4 * * *'}]   # 04:00 UTC nightly
+#     workflow_dispatch:
+#   jobs:
+#     full-smoke:
+#       uses: KombiverseLabs/.github/.github/workflows/nightly-full-smoke.yml@main
+#       with:
+#         service-url: https://blog.kombify.io
+#         playwright-config: playwright.config.ts
+#         repo: kombify-blog
+#       secrets:
+#         SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+#
+# Kritischer Pfad: install (5) + e2e (20) + visual (10) + report (2) = 37 min
+# (acceptable because non-blocking)
+
+on:
+  workflow_call:
+    inputs:
+      service-url:
+        description: "Service base URL to test against"
+        required: true
+        type: string
+      repo-checkout-ref:
+        description: "Optional ref to check out for tests (default: github.ref)"
+        required: false
+        type: string
+        default: ""
+      node-version:
+        description: "Node version (default: 22)"
+        required: false
+        type: string
+        default: "22"
+      bun-version:
+        description: "Bun version (default: 1.3.13)"
+        required: false
+        type: string
+        default: "1.3.13"
+      use-bun:
+        description: "Use bun for install/run instead of node"
+        required: false
+        type: boolean
+        default: true
+      playwright-config:
+        description: "Playwright config file (default: playwright.config.ts)"
+        required: false
+        type: string
+        default: "playwright.config.ts"
+      visual-config:
+        description: "Optional Playwright visual regression config"
+        required: false
+        type: string
+        default: ""
+      install-cmd:
+        description: "Install command (default: bun install --frozen-lockfile)"
+        required: false
+        type: string
+        default: "bun install --frozen-lockfile"
+      browsers:
+        description: "Comma-separated browsers (chromium,firefox,webkit)"
+        required: false
+        type: string
+        default: "chromium,firefox,webkit"
+      sentry-org:
+        description: "Sentry org slug"
+        required: false
+        type: string
+        default: "kombiverse-labs"
+      sentry-project:
+        description: "Sentry project slug for failure reporting"
+        required: false
+        type: string
+        default: ""
+      auto-issue-on-failure:
+        description: "Auto-create a GitHub Issue on failure"
+        required: false
+        type: boolean
+        default: true
+      runner:
+        description: "Runner label override"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      SENTRY_AUTH_TOKEN:
+        required: false
+      GH_PAT:
+        required: false
+
+concurrency:
+  group: nightly-smoke-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  e2e:
+    name: E2E (${{ matrix.browser }})
+    runs-on: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-4vcpu-ubuntu-2204') }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: ${{ fromJson(format('["{0}"]', replace(inputs.browsers, ',', '","'))) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.repo-checkout-ref != '' && inputs.repo-checkout-ref || github.ref }}
+
+      - name: Setup Bun
+        if: inputs.use-bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
+      - name: Setup Node
+        if: ${{ !inputs.use-bun }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install dependencies
+        run: ${{ inputs.install-cmd }}
+
+      - name: Install Playwright browsers
+        run: |
+          if ${{ inputs.use-bun }}; then
+            bunx playwright install --with-deps ${{ matrix.browser }}
+          else
+            npx playwright install --with-deps ${{ matrix.browser }}
+          fi
+
+      - name: Run Playwright tests
+        env:
+          BASE_URL: ${{ inputs.service-url }}
+        run: |
+          if ${{ inputs.use-bun }}; then
+            bunx playwright test --config=${{ inputs.playwright-config }} --project=${{ matrix.browser }}
+          else
+            npx playwright test --config=${{ inputs.playwright-config }} --project=${{ matrix.browser }}
+          fi
+
+      - name: Upload artifacts on failure
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ matrix.browser }}
+          path: |
+            playwright-report
+            test-results
+          retention-days: 5
+
+  visual:
+    name: Visual Regression
+    if: inputs.visual-config != ''
+    runs-on: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-4vcpu-ubuntu-2204') }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.repo-checkout-ref != '' && inputs.repo-checkout-ref || github.ref }}
+
+      - name: Setup Bun
+        if: inputs.use-bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
+      - name: Setup Node
+        if: ${{ !inputs.use-bun }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install dependencies
+        run: ${{ inputs.install-cmd }}
+
+      - name: Install Playwright browsers (chromium for visual)
+        run: |
+          if ${{ inputs.use-bun }}; then
+            bunx playwright install --with-deps chromium
+          else
+            npx playwright install --with-deps chromium
+          fi
+
+      - name: Run visual regression
+        env:
+          BASE_URL: ${{ inputs.service-url }}
+        run: |
+          if ${{ inputs.use-bun }}; then
+            bunx playwright test --config=${{ inputs.visual-config }}
+          else
+            npx playwright test --config=${{ inputs.visual-config }}
+          fi
+
+      - name: Upload visual diffs on failure
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-regression-diffs
+          path: |
+            test-results
+            playwright-report
+          retention-days: 7
+
+  report:
+    name: Report Failures
+    needs: [e2e, visual]
+    if: always() && (needs.e2e.result == 'failure' || needs.visual.result == 'failure')
+    runs-on: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-4vcpu-ubuntu-2204') }}
+    timeout-minutes: 5
+    steps:
+      - name: Sentry failure event
+        if: inputs.sentry-project != '' && env.SENTRY_AUTH_TOKEN != ''
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ inputs.sentry-org }}
+          SENTRY_PROJECT: ${{ inputs.sentry-project }}
+          SENTRY_URL: https://de.sentry.io
+        run: |
+          curl -fsSL https://sentry.io/get-cli/ | bash
+          sentry-cli send-event \
+            --message "Nightly full-smoke failed: ${{ inputs.service-url }}" \
+            --level error \
+            --tag environment:nightly \
+            --tag service:${{ inputs.sentry-project }} \
+            --tag run_url:${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Auto-create issue
+        if: inputs.auto-issue-on-failure
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT != '' && secrets.GH_PAT || github.token }}
+        run: |
+          # Check if an open issue with this title already exists; if so, just comment.
+          TITLE="Nightly full-smoke failed: ${{ inputs.service-url }}"
+          BODY=$(cat <<EOF
+          The nightly full-smoke run failed.
+
+          - **Service URL:** ${{ inputs.service-url }}
+          - **E2E result:** ${{ needs.e2e.result }}
+          - **Visual result:** ${{ needs.visual.result }}
+          - **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          - **Date:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          Auto-generated by nightly-full-smoke.yml. Investigate via the run link
+          and the uploaded Playwright artifacts.
+          EOF
+          )
+
+          EXISTING=$(gh issue list \
+            --repo "${{ github.repository }}" \
+            --search "$TITLE in:title is:open" \
+            --json number --jq '.[0].number' || echo "")
+
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --repo "${{ github.repository }}" --body "$BODY"
+          else
+            gh issue create \
+              --repo "${{ github.repository }}" \
+              --title "$TITLE" \
+              --label "nightly-smoke,bug" \
+              --body "$BODY"
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Nightly Full Smoke FAILED"
+            echo ""
+            echo "- **Service:** ${{ inputs.service-url }}"
+            echo "- **E2E:** ${{ needs.e2e.result }}"
+            echo "- **Visual:** ${{ needs.visual.result }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::Nightly smoke failed for ${{ inputs.service-url }} — see auto-created issue"

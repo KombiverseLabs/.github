@@ -1,0 +1,151 @@
+name: Quick Smoke (Deploy Gate)
+# Reusable workflow: ≤5 minutes health + critical-path smoke as a hard
+# deploy gate. Replaces 20-min Browser-Smoke as deploy blocker.
+# Heavy E2E lives in nightly-full-smoke.yml.
+#
+# Standard reference: kombify Core/standards/DEPLOYMENT-STANDARD.md §5.1
+#
+# Caller usage:
+#   jobs:
+#     smoke:
+#       needs: deploy
+#       uses: KombiverseLabs/.github/.github/workflows/quick-smoke.yml@main
+#       with:
+#         service-url: https://blog.kombify.dev
+#         health-path: /health
+#         smoke-expected-content: "kombify"
+#
+# Kritischer Pfad: smoke (5) = 5 min max
+
+on:
+  workflow_call:
+    inputs:
+      service-url:
+        description: "Base service URL (e.g. https://blog.kombify.dev)"
+        required: true
+        type: string
+      health-path:
+        description: "Health endpoint path (default: /health)"
+        required: false
+        type: string
+        default: "/health"
+      max-retries:
+        description: "Max retries for health check (default: 12, ~2 min total)"
+        required: false
+        type: number
+        default: 12
+      retry-interval:
+        description: "Seconds between retries (default: 10)"
+        required: false
+        type: number
+        default: 10
+      expected-content-type:
+        description: "Optional expected Content-Type substring (e.g. application/json, text/html)"
+        required: false
+        type: string
+        default: ""
+      smoke-expected-content:
+        description: "Optional comma-separated substrings expected in smoke response"
+        required: false
+        type: string
+        default: ""
+      version-endpoint:
+        description: "Optional path to version/sha endpoint for L4 check"
+        required: false
+        type: string
+        default: ""
+      version-sha:
+        description: "Optional expected SHA in version endpoint response"
+        required: false
+        type: string
+        default: ""
+      sentry-release-sha:
+        description: "Optional: create a Sentry release marker for this SHA on success"
+        required: false
+        type: string
+        default: ""
+      sentry-org:
+        description: "Sentry org slug (default: kombiverse-labs)"
+        required: false
+        type: string
+        default: "kombiverse-labs"
+      sentry-project:
+        description: "Sentry project slug (e.g. kombify-blog)"
+        required: false
+        type: string
+        default: ""
+      sentry-environment:
+        description: "Sentry environment (default: dev)"
+        required: false
+        type: string
+        default: "dev"
+      runner:
+        description: "Runner label override"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      SENTRY_AUTH_TOKEN:
+        required: false
+
+concurrency:
+  group: quick-smoke-${{ github.workflow }}-${{ inputs.service-url }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Quick Smoke (${{ inputs.service-url }})
+    runs-on: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-4vcpu-ubuntu-2204') }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout (for verify-deployment composite)
+        uses: actions/checkout@v4
+        with:
+          repository: KombiverseLabs/.github
+          ref: main
+          path: .gha-shared
+
+      - name: Verify health
+        id: health
+        uses: ./.gha-shared/.github/actions/verify-deployment
+        with:
+          url: ${{ inputs.service-url }}${{ inputs.health-path }}
+          expected-content-type: ${{ inputs.expected-content-type }}
+          version-endpoint: ${{ inputs.version-endpoint }}
+          version-sha: ${{ inputs.version-sha }}
+          smoke-test-url: ${{ inputs.service-url }}
+          smoke-test-content: ${{ inputs.smoke-expected-content }}
+          max-retries: ${{ inputs.max-retries }}
+          retry-delay: ${{ inputs.retry-interval }}
+          timeout: "15"
+
+      - name: Sentry release marker
+        if: success() && inputs.sentry-release-sha != '' && inputs.sentry-project != '' && env.SENTRY_AUTH_TOKEN != ''
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ inputs.sentry-org }}
+          SENTRY_PROJECT: ${{ inputs.sentry-project }}
+          SENTRY_URL: https://de.sentry.io
+        uses: getsentry/action-release@v1
+        with:
+          environment: ${{ inputs.sentry-environment }}
+          version: ${{ inputs.sentry-release-sha }}
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Quick Smoke"
+            echo ""
+            echo "**URL:** ${{ inputs.service-url }}${{ inputs.health-path }}"
+            echo "**Result:** ${{ steps.health.outputs.status }}"
+            echo "**Level reached:** ${{ steps.health.outputs.level-reached }}"
+            echo "**HTTP code:** ${{ steps.health.outputs.http-code }}"
+            if [ -n "${{ steps.health.outputs.errors }}" ]; then
+              echo ""
+              echo "**Errors:** ${{ steps.health.outputs.errors }}"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
