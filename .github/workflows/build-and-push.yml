@@ -85,7 +85,16 @@ on:
         value: ${{ jobs.build.outputs.digest }}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Concurrency group is keyed on the IMAGE name, not just the workflow/ref.
+  # When a caller workflow fans out into multiple parallel build jobs (e.g.
+  # build-server + build-portal + build-mobile in kombify-AI/Build), every
+  # invocation of THIS reusable workflow shares the same github.workflow
+  # ("Build and Push to GHCR") and the same github.ref (refs/heads/main).
+  # Without image-name in the key those parallel sibling jobs all landed
+  # in one group and cancelled each other - only the last one ever finished.
+  # Keying on inputs.image-name keeps fan-out healthy while still cancelling
+  # truly redundant rebuilds of the same image on the same ref.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.image-name }}
   cancel-in-progress: true
 
 permissions:
