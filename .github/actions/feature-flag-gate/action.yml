@@ -143,6 +143,15 @@ runs:
         # Path 1 (preferred): mint short-lived HS256 JWT with SERVICE_AUTH_SECRET.
         # Path 2 (legacy): pass SERVICE_KEY as Authorization: Bearer.
         if [ -n "${SERVICE_AUTH_SECRET:-}" ]; then
+          # Doppler sometimes stores values with trailing whitespace/CR.
+          # Admin's tryServiceAuth() does env.SERVICE_AUTH_SECRET?.trim()
+          # before HMAC verification, so we MUST trim here too — otherwise
+          # the signing key differs and the JWT signature will not verify.
+          SERVICE_AUTH_SECRET=$(printf '%s' "$SERVICE_AUTH_SECRET" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          if [ -z "$SERVICE_AUTH_SECRET" ]; then
+            echo "::error::SERVICE_AUTH_SECRET is empty after trim — check the Doppler value." >&2
+            exit 1
+          fi
           NOW=$(date +%s)
           EXP=$((NOW + 300))
           HEADER_JSON='{"alg":"HS256","typ":"JWT"}'
