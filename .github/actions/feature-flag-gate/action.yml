@@ -11,10 +11,14 @@ description: |
     - kombify Core/standards/FEATURE-FLAGS-STANDARD.md
     - kombify Core/standards/MODULAR-RELEASE-STRATEGY.md
 
-  Auth:
-    Uses Authorization: Bearer <service-key>. The service key is an HS256 JWT
-    signed by go-common/servicecall — fetched from Doppler `kombify-io/prd_admin`
-    (`ADMIN_SERVICE_KEY`). Never inline.
+  Auth (two paths, in priority order):
+    1. Preferred: service-auth-secret. The action mints a short-lived (5min)
+       HS256 JWT signed with SERVICE_AUTH_SECRET (Doppler kombify-io/prd_admin)
+       and sends it via X-Kombify-Service-Auth, validated by Admin's
+       tryServiceAuth(). Stateless, no long-lived bearer tokens.
+    2. Legacy: service-key. A pre-signed token compared against ADMIN_SERVICE_KEY
+       (Doppler kombify-io/prd_admin) via Authorization: Bearer. Kept for
+       backward compatibility — prefer path 1 for new pipelines.
 
 inputs:
   category:
@@ -31,11 +35,30 @@ inputs:
       list each missing flag.
     required: false
     default: "[]"
+  service-auth-secret:
+    description: |
+      Preferred. SERVICE_AUTH_SECRET (HMAC) shared with kombify-Administration.
+      Doppler key: `SERVICE_AUTH_SECRET` in `kombify-io/prd_admin`. The action
+      mints a short-lived HS256 JWT and sends it via X-Kombify-Service-Auth.
+      Either this or `service-key` must be set.
+    required: false
+    default: ""
+  caller-name:
+    description: |
+      Service name used as `iss`/`svc` claim of the minted JWT (only relevant
+      when service-auth-secret is set). Must be present in
+      SERVICE_AUTH_ALLOWED_CALLERS on the Admin side. Defaults to "ai".
+    required: false
+    default: "ai"
   service-key:
     description: |
-      Service key (HS256 JWT) for the Admin API. Required. Pass via secrets,
-      never inline. Doppler key: `ADMIN_SERVICE_KEY` in `kombify-io/prd_admin`.
-    required: true
+      Legacy. Pre-signed shared key (HS256 JWT or static token) compared
+      against ADMIN_SERVICE_KEY on the Admin side. Doppler key:
+      `ADMIN_SERVICE_KEY` in `kombify-io/prd_admin`. Either this or
+      `service-auth-secret` must be set; if both are set, service-auth-secret
+      wins.
+    required: false
+    default: ""
   admin-base-url:
     description: Admin API base URL.
     required: false
@@ -59,14 +82,22 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Mask service key
+    - name: Validate auth inputs and mask
       shell: bash
+      env:
+        SERVICE_AUTH_SECRET: ${{ inputs.service-auth-secret }}
+        SERVICE_KEY: ${{ inputs.service-key }}
       run: |
-        if [ -z "${{ inputs.service-key }}" ]; then
-          echo "::error::service-key input is empty. Pass ADMIN_SERVICE_KEY from Doppler kombify-io/prd_admin." >&2
+        if [ -z "${SERVICE_AUTH_SECRET:-}" ] && [ -z "${SERVICE_KEY:-}" ]; then
+          echo "::error::Either service-auth-secret (preferred, from SERVICE_AUTH_SECRET) or service-key (legacy ADMIN_SERVICE_KEY) must be set." >&2
           exit 1
         fi
-        echo "::add-mask::${{ inputs.service-key }}"
+        if [ -n "${SERVICE_AUTH_SECRET:-}" ]; then
+          echo "::add-mask::${SERVICE_AUTH_SECRET}"
+        fi
+        if [ -n "${SERVICE_KEY:-}" ]; then
+          echo "::add-mask::${SERVICE_KEY}"
+        fi
 
     - name: Bypass with audit log
       if: inputs.bypass-fragile == 'true'
@@ -93,18 +124,58 @@ runs:
         ADMIN_BASE_URL: ${{ inputs.admin-base-url }}
         CATEGORY: ${{ inputs.category }}
         REQUIRED_FLAGS: ${{ inputs.required-flags }}
+        SERVICE_AUTH_SECRET: ${{ inputs.service-auth-secret }}
         SERVICE_KEY: ${{ inputs.service-key }}
+        CALLER_NAME: ${{ inputs.caller-name }}
       run: |
         set -euo pipefail
         if ! command -v jq >/dev/null 2>&1; then
           sudo apt-get update -qq && sudo apt-get install -y jq
         fi
 
+        # base64url helper (no padding) — preserves binary fidelity for HMAC sig.
+        b64url() {
+          # Reads stdin, emits base64url with padding stripped.
+          base64 -w 0 | tr '+/' '-_' | tr -d '='
+        }
+
+        # Build Authorization header.
+        # Path 1 (preferred): mint short-lived HS256 JWT with SERVICE_AUTH_SECRET.
+        # Path 2 (legacy): pass SERVICE_KEY as Authorization: Bearer.
+        if [ -n "${SERVICE_AUTH_SECRET:-}" ]; then
+          NOW=$(date +%s)
+          EXP=$((NOW + 300))
+          HEADER_JSON='{"alg":"HS256","typ":"JWT"}'
+          # Admin's tryServiceAuth() requires:
+          #   - aud == "kombify-administration"
+          #   - svc in SERVICE_AUTH_ALLOWED_CALLERS (default: cloud,ai,sim,techstack,stackkits,admin-jobs)
+          PAYLOAD_JSON=$(jq -nc \
+            --arg iss "kombify-${CALLER_NAME}" \
+            --arg aud "kombify-administration" \
+            --arg svc "${CALLER_NAME}" \
+            --argjson iat "${NOW}" \
+            --argjson exp "${EXP}" \
+            '{iss:$iss, aud:$aud, svc:$svc, iat:$iat, exp:$exp}')
+          HEADER_B64=$(printf '%s' "$HEADER_JSON" | b64url)
+          PAYLOAD_B64=$(printf '%s' "$PAYLOAD_JSON" | b64url)
+          SIGNING_INPUT="${HEADER_B64}.${PAYLOAD_B64}"
+          SIG_B64=$(printf '%s' "$SIGNING_INPUT" \
+            | openssl dgst -sha256 -hmac "$SERVICE_AUTH_SECRET" -binary \
+            | b64url)
+          JWT="${SIGNING_INPUT}.${SIG_B64}"
+          echo "::add-mask::$JWT"
+          AUTH_HEADER="X-Kombify-Service-Auth: $JWT"
+          echo "Auth: minted HS256 service-auth JWT (svc=${CALLER_NAME}, ttl=300s)"
+        else
+          AUTH_HEADER="Authorization: Bearer $SERVICE_KEY"
+          echo "Auth: legacy ADMIN_SERVICE_KEY bearer"
+        fi
+
         URL="${ADMIN_BASE_URL%/}/api/v1/feature-flags/release-manifest?category=${CATEGORY}"
         echo "GET $URL"
 
         HTTP_CODE=$(curl -sS -o /tmp/ff-manifest.json -w "%{http_code}" \
-          -H "Authorization: Bearer $SERVICE_KEY" \
+          -H "$AUTH_HEADER" \
           -H "Accept: application/json" \
           --max-time 20 \
           --retry 3 --retry-delay 2 --retry-connrefused \
@@ -126,14 +197,6 @@ runs:
         # 1. Required flags check (when caller provided a list).
         REQUIRED_COUNT=$(echo "$REQUIRED_FLAGS" | jq 'length')
         if [ "$REQUIRED_COUNT" -gt 0 ]; then
-          MISSING=$(jq --argjson required "$REQUIRED_FLAGS" '
-            [ $required[] | . as $key
-              | if (.[$key]? // null) | (. != null and .released == true)
-                then empty
-                else $key
-              end ]
-          ' /tmp/ff-manifest.json 2>/dev/null || true)
-          # The expression above is intentionally simple; re-do with a clearer pipeline:
           MISSING=$(jq -r --argjson required "$REQUIRED_FLAGS" '
             [$required[] as $k | select((.features[$k]? // {released:false}).released != true) | $k] | .[]
           ' /tmp/ff-manifest.json | tr "\n" " " | sed "s/ $//" || true)
