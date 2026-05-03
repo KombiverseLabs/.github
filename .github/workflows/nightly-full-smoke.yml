@@ -104,14 +104,43 @@ permissions:
   issues: write
 
 jobs:
+  prepare_browsers:
+    name: Prepare browser matrix
+    runs-on: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-2vcpu-ubuntu-2204') }}
+    timeout-minutes: 5
+    outputs:
+      browsers: ${{ steps.browsers.outputs.json }}
+    steps:
+      - id: browsers
+        name: Convert browser list to JSON
+        shell: bash
+        env:
+          BROWSERS: ${{ inputs.browsers }}
+        run: |
+          set -euo pipefail
+          json="$(python3 - <<'PY'
+          import json
+          import os
+
+          raw = os.environ.get("BROWSERS", "")
+          browsers = [item.strip() for item in raw.split(",") if item.strip()]
+          if not browsers:
+              browsers = ["chromium"]
+
+          print(json.dumps(browsers))
+          PY
+          )"
+          echo "json=${json}" >> "$GITHUB_OUTPUT"
+
   e2e:
     name: E2E (${{ matrix.browser }})
-    runs-on: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-4vcpu-ubuntu-2204') }}
+    needs: prepare_browsers
+    runs-on: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-2vcpu-ubuntu-2204') }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        browser: ${{ fromJson(format('["{0}"]', replace(inputs.browsers, ',', '","'))) }}
+        browser: ${{ fromJson(needs.prepare_browsers.outputs.browsers) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -164,7 +193,7 @@ jobs:
   visual:
     name: Visual Regression
     if: inputs.visual-config != ''
-    runs-on: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-4vcpu-ubuntu-2204') }}
+    runs-on: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-2vcpu-ubuntu-2204') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -219,7 +248,7 @@ jobs:
     name: Report Failures
     needs: [e2e, visual]
     if: always() && (needs.e2e.result == 'failure' || needs.visual.result == 'failure')
-    runs-on: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-4vcpu-ubuntu-2204') }}
+    runs-on: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-2vcpu-ubuntu-2204') }}
     timeout-minutes: 5
     steps:
       - name: Sentry failure event

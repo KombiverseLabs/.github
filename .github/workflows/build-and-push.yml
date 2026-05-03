@@ -54,7 +54,7 @@ on:
         description: 'Preferred runner label. Defaults to Blacksmith cloud runner.'
         required: false
         type: string
-        default: 'blacksmith-4vcpu-ubuntu-2204'
+        default: 'blacksmith-2vcpu-ubuntu-2204'
       checkout-ref:
         description: 'Optional git ref or SHA to checkout before building. Defaults to the workflow commit.'
         required: false
@@ -103,7 +103,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ${{ inputs.runner || 'blacksmith-4vcpu-ubuntu-2204' }}
+    runs-on: ${{ inputs.runner || 'blacksmith-2vcpu-ubuntu-2204' }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -354,7 +354,7 @@ jobs:
           echo "### Docker Image Built" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Image:** \`${{ steps.image-name.outputs.name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Runner:** \`${{ inputs.runner || 'blacksmith-4vcpu-ubuntu-2204' }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Runner:** \`${{ inputs.runner || 'blacksmith-2vcpu-ubuntu-2204' }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY

@@ -56,7 +56,7 @@ on:
         description: "Runner label"
         required: false
         type: string
-        default: "blacksmith-4vcpu-ubuntu-2204"
+        default: "blacksmith-2vcpu-ubuntu-2204"
     secrets:
       DOPPLER_TOKEN:
         description: "Doppler token with access to kombify-io/prd_render (holds Render API key + service IDs)"

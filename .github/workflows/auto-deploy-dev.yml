@@ -156,7 +156,7 @@ jobs:
       build-args: ${{ inputs.build-args }}
       doppler-build-secrets: ${{ inputs.doppler-build-secrets }}
       platforms: ${{ inputs.platforms }}
-      runner: ${{ inputs.runner != '' && inputs.runner || (vars.BUILD_RUNNER || 'blacksmith-4vcpu-ubuntu-2204') }}
+      runner: ${{ inputs.runner != '' && inputs.runner || (vars.BUILD_RUNNER || 'blacksmith-2vcpu-ubuntu-2204') }}
     secrets:
       GH_PAT: ${{ secrets.GH_PAT }}
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -178,7 +178,7 @@ jobs:
       health-check-interval: ${{ inputs.health-check-interval }}
       doppler-project: kombify-ionos-dev
       doppler-config: dev
-      runner: ${{ inputs.runner != '' && inputs.runner || (vars.DEPLOY_RUNNER || 'blacksmith-4vcpu-ubuntu-2204') }}
+      runner: ${{ inputs.runner != '' && inputs.runner || (vars.DEPLOY_RUNNER || 'blacksmith-2vcpu-ubuntu-2204') }}
     secrets:
       DOPPLER_TOKEN: ${{ secrets.DEPLOY_DOPPLER_TOKEN }}
       DOPPLER_TOKEN_RUNTIME: ${{ secrets.DOPPLER_TOKEN_RUNTIME }}
@@ -190,12 +190,12 @@ jobs:
     with:
       service-url: ${{ inputs.health-check-url }}
       smoke-expected-content: ${{ inputs.smoke-expected-content }}
-      runner: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-4vcpu-ubuntu-2204') }}
+      runner: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-2vcpu-ubuntu-2204') }}
 
   summary:
     name: Auto-Deploy Summary
     needs: [build, deploy, smoke]
-    runs-on: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-4vcpu-ubuntu-2204') }}
+    runs-on: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-2vcpu-ubuntu-2204') }}
     timeout-minutes: 2
     if: always()
     steps:

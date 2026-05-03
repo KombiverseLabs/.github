@@ -63,7 +63,7 @@ on:
         description: "Runner label"
         required: false
         type: string
-        default: "blacksmith-4vcpu-ubuntu-2204"
+        default: "blacksmith-2vcpu-ubuntu-2204"
       doppler-project:
         description: "Doppler project containing VPS SSH credentials"
         required: false

@@ -98,7 +98,7 @@ permissions:
 jobs:
   smoke:
     name: Quick Smoke (${{ inputs.service-url }})
-    runs-on: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-4vcpu-ubuntu-2204') }}
+    runs-on: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-2vcpu-ubuntu-2204') }}
     timeout-minutes: 5
     steps:
       - name: Checkout (for verify-deployment composite)

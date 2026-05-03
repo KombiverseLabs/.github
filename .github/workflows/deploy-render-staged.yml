@@ -89,7 +89,7 @@ on:
         description: "Runner label"
         required: false
         type: string
-        default: "blacksmith-4vcpu-ubuntu-2204"
+        default: "blacksmith-2vcpu-ubuntu-2204"
     secrets:
       DOPPLER_TOKEN_RENDER:
         description: "Doppler service token for config holding RENDER_API_KEY + service IDs"

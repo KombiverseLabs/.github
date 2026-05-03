@@ -60,7 +60,7 @@ permissions:
 jobs:
   guard:
     name: Check no Zitadel references
-    runs-on: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-4vcpu-ubuntu-2204') }}
+    runs-on: ${{ inputs.runner != '' && inputs.runner || (vars.CI_RUNNER || 'blacksmith-2vcpu-ubuntu-2204') }}
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
