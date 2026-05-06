@@ -1,0 +1,75 @@
+name: Render CLI Bootstrap
+description: Install the Render CLI once per runner and cache the binary between runs.
+
+inputs:
+  cache-dir:
+    description: Directory to cache the Render CLI binary between runs.
+    required: false
+    default: ~/.cache/render-cli
+
+outputs:
+  render-version:
+    description: Render CLI version that ended up installed.
+    value: ${{ steps.version.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Restore Render CLI cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ inputs.cache-dir }}
+        key: render-cli-${{ runner.os }}-${{ runner.arch }}-v1
+
+    - name: Install Render CLI
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        CACHE_DIR="${{ inputs.cache-dir }}"
+        CACHE_DIR="${CACHE_DIR/#\~/$HOME}"
+        mkdir -p "$CACHE_DIR"
+
+        if command -v render >/dev/null 2>&1; then
+          echo "Render CLI already on PATH: $(command -v render)"
+          cp "$(command -v render)" "$CACHE_DIR/render" 2>/dev/null || true
+          exit 0
+        fi
+
+        if [ -x "$CACHE_DIR/render" ]; then
+          echo "Restoring Render CLI from cache: $CACHE_DIR/render"
+          echo "$CACHE_DIR" >> "$GITHUB_PATH"
+          export PATH="$CACHE_DIR:$PATH"
+          exit 0
+        fi
+
+        echo "Installing Render CLI from official installer"
+        curl -fsSL https://raw.githubusercontent.com/render-oss/cli/refs/heads/main/bin/install.sh | sh
+
+        for candidate in \
+          "$HOME/.render/bin/render" \
+          "$HOME/.local/bin/render" \
+          "$HOME/bin/render"
+        do
+          if [ -x "$candidate" ]; then
+            echo "$(dirname "$candidate")" >> "$GITHUB_PATH"
+            export PATH="$(dirname "$candidate"):$PATH"
+            break
+          fi
+        done
+
+        if ! command -v render >/dev/null 2>&1; then
+          echo "::error::Render CLI installer completed but render was not found on PATH" >&2
+          exit 1
+        fi
+
+        cp "$(command -v render)" "$CACHE_DIR/render"
+
+    - name: Capture Render CLI version
+      id: version
+      shell: bash
+      run: |
+        set -euo pipefail
+        VERSION="$(render --version 2>/dev/null | head -1)"
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "Render CLI: $VERSION"

@@ -99,7 +99,7 @@ on:
         required: false
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.service-name }}-${{ inputs.service-id-key-production }}
   cancel-in-progress: true
 
 permissions:
@@ -114,23 +114,12 @@ jobs:
     outputs:
       status: ${{ steps.wait.outputs.status }}
     steps:
-      - name: Install Doppler CLI
-        shell: bash
-        run: |
-          if command -v doppler >/dev/null 2>&1; then exit 0; fi
-          sudo mkdir -p /usr/share/keyrings
-          if [ ! -f /usr/share/keyrings/doppler-archive-keyring.gpg ]; then
-            curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
-              'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' \
-              | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
-          fi
-          if [ ! -f /etc/apt/sources.list.d/doppler-cli.list ]; then
-            echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] https://packages.doppler.com/public/cli/deb/debian any-version main" \
-              | sudo tee /etc/apt/sources.list.d/doppler-cli.list
-          fi
-          sudo apt-get update -qq
-          sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
-            apt-get install -y doppler
+      - name: Bootstrap Doppler CLI
+        uses: KombiverseLabs/.github/.github/actions/doppler-bootstrap@main
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_RENDER }}
+          validate-project: ${{ inputs.render-credentials-project }}
+          validate-config: ${{ inputs.render-credentials-config }}
 
       - name: Resolve Render credentials
         id: resolve
@@ -493,23 +482,12 @@ jobs:
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 15
     steps:
-      - name: Install Doppler CLI
-        shell: bash
-        run: |
-          if command -v doppler >/dev/null 2>&1; then exit 0; fi
-          sudo mkdir -p /usr/share/keyrings
-          if [ ! -f /usr/share/keyrings/doppler-archive-keyring.gpg ]; then
-            curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
-              'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' \
-              | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
-          fi
-          if [ ! -f /etc/apt/sources.list.d/doppler-cli.list ]; then
-            echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] https://packages.doppler.com/public/cli/deb/debian any-version main" \
-              | sudo tee /etc/apt/sources.list.d/doppler-cli.list
-          fi
-          sudo apt-get update -qq
-          sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
-            apt-get install -y doppler
+      - name: Bootstrap Doppler CLI
+        uses: KombiverseLabs/.github/.github/actions/doppler-bootstrap@main
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_RENDER }}
+          validate-project: ${{ inputs.render-credentials-project }}
+          validate-config: ${{ inputs.render-credentials-config }}
 
       - name: Resolve Render credentials
         id: resolve

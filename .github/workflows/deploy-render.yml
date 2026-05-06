@@ -4,7 +4,7 @@ name: Deploy via Render CLI
 # Service ID and API key are resolved from Doppler prd_render.
 # When runtime-env-project/config are provided, direct Render service env vars
 # are synchronized from Doppler before the deploy starts.
-# Replaces deploy-coolify-v2.yml.
+# Standard Render deployment workflow for production and preview services.
 
 on:
   workflow_call:
@@ -65,7 +65,7 @@ on:
 # Kritischer Pfad: deploy (15) = 15 min max
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.service-id || inputs.service-id-key || inputs.image-repository }}
   cancel-in-progress: true
 
 permissions:
@@ -78,26 +78,15 @@ jobs:
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 15
     steps:
-      - name: Install Doppler CLI
-        shell: bash
-        run: |
-          if command -v doppler >/dev/null 2>&1; then exit 0; fi
-          sudo mkdir -p /usr/share/keyrings
-          if [ ! -f /usr/share/keyrings/doppler-archive-keyring.gpg ]; then
-            curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
-              'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' \
-              | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
-          fi
-          if [ ! -f /etc/apt/sources.list.d/doppler-cli.list ]; then
-            echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] https://packages.doppler.com/public/cli/deb/debian any-version main" \
-              | sudo tee /etc/apt/sources.list.d/doppler-cli.list
-          fi
-          sudo apt-get update -qq && sudo apt-get install -y doppler
+      - name: Bootstrap Doppler CLI
+        uses: KombiverseLabs/.github/.github/actions/doppler-bootstrap@main
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          validate-project: kombify-io
+          validate-config: prd_render
 
-      - name: Install Render CLI
-        shell: bash
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/render-oss/cli/refs/heads/main/bin/install.sh | sh
+      - name: Bootstrap Render CLI
+        uses: KombiverseLabs/.github/.github/actions/render-cli-bootstrap@main
 
       - name: Resolve Render credentials from Doppler
         id: resolve

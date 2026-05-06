@@ -55,6 +55,11 @@ on:
         required: false
         type: string
         default: 'blacksmith-2vcpu-ubuntu-2204'
+      build-engine:
+        description: 'Docker build engine: auto, blacksmith, or portable Buildx.'
+        required: false
+        type: string
+        default: 'auto'
       checkout-ref:
         description: 'Optional git ref or SHA to checkout before building. Defaults to the workflow commit.'
         required: false
@@ -62,6 +67,11 @@ on:
         default: ''
       image-sha:
         description: 'Optional full commit SHA used for the immutable git-* image tag. Defaults to the workflow commit.'
+        required: false
+        type: string
+        default: ''
+      cache-scope:
+        description: 'Optional BuildKit cache scope. Defaults to image-name, then repository name.'
         required: false
         type: string
         default: ''
@@ -112,7 +122,7 @@ jobs:
       image: ${{ steps.single-tag.outputs.image }}
       image_tag: ${{ steps.deploy-ref.outputs.image_tag }}
       image_repository: ${{ steps.deploy-ref.outputs.image_repository }}
-      digest: ${{ steps.build.outputs.digest }}
+      digest: ${{ steps.build-output.outputs.digest }}
 
     steps:
       - name: Checkout
@@ -252,8 +262,43 @@ jobs:
               print('EOF', file=handle)
           PYEOF
 
-      - name: Set up Docker Buildx
+      - name: Resolve Docker build engine
+        id: build-engine
+        env:
+          INPUT_BUILD_ENGINE: ${{ inputs.build-engine || 'auto' }}
+          INPUT_RUNNER: ${{ inputs.runner || 'blacksmith-2vcpu-ubuntu-2204' }}
+        run: |
+          set -euo pipefail
+
+          case "$INPUT_BUILD_ENGINE" in
+            auto)
+              if printf '%s' "$INPUT_RUNNER" | grep -q 'blacksmith'; then
+                ENGINE="blacksmith"
+              else
+                ENGINE="portable"
+              fi
+              ;;
+            blacksmith|portable)
+              ENGINE="$INPUT_BUILD_ENGINE"
+              ;;
+            *)
+              echo "Unsupported build-engine: $INPUT_BUILD_ENGINE" >&2
+              echo "Use one of: auto, blacksmith, portable" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "engine=$ENGINE" >> "$GITHUB_OUTPUT"
+          echo "Docker build engine: $ENGINE"
+
+      - name: Set up Docker Buildx (Blacksmith)
+        if: steps.build-engine.outputs.engine == 'blacksmith'
         uses: useblacksmith/setup-docker-builder@v1
+
+      - name: Set up Docker Buildx (portable)
+        if: steps.build-engine.outputs.engine == 'portable'
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to GHCR
         if: inputs.push
         uses: docker/login-action@v4
@@ -282,8 +327,9 @@ jobs:
             type=raw,value=${{ inputs.tag-prefix }}latest
             type=ref,event=branch,prefix=${{ inputs.tag-prefix }}
 
-      - name: Build and push
-        id: build
+      - name: Build and push (Blacksmith)
+        id: build-blacksmith
+        if: steps.build-engine.outputs.engine == 'blacksmith'
         uses: useblacksmith/build-push-action@v2
         env:
           # Build summaries stay enabled, but the artifact-backed build record is not worth noisy quota warnings.
@@ -296,6 +342,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ inputs.build-args }}
+          cache-from: type=gha,scope=${{ inputs.cache-scope != '' && inputs.cache-scope || inputs.image-name || github.event.repository.name }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.cache-scope != '' && inputs.cache-scope || inputs.image-name || github.event.repository.name }}
           secrets: |
             GITHUB_TOKEN=${{ secrets.GH_PAT != '' && secrets.GH_PAT || github.token }}
             ${{ steps.doppler-build-secrets.outputs.docker_secrets }}
@@ -303,6 +351,41 @@ jobs:
             ${{ steps.doppler-runtime-env.outputs.docker_secret_file }}
           provenance: false
           sbom: false
+
+      - name: Build and push (portable)
+        id: build-portable
+        if: steps.build-engine.outputs.engine == 'portable'
+        uses: docker/build-push-action@v6
+        env:
+          # Build summaries stay enabled, but the artifact-backed build record is not worth noisy quota warnings.
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          push: ${{ inputs.push }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ inputs.build-args }}
+          cache-from: type=gha,scope=${{ inputs.cache-scope != '' && inputs.cache-scope || inputs.image-name || github.event.repository.name }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.cache-scope != '' && inputs.cache-scope || inputs.image-name || github.event.repository.name }}
+          secrets: |
+            GITHUB_TOKEN=${{ secrets.GH_PAT != '' && secrets.GH_PAT || github.token }}
+            ${{ steps.doppler-build-secrets.outputs.docker_secrets }}
+          secret-files: |
+            ${{ steps.doppler-runtime-env.outputs.docker_secret_file }}
+          provenance: false
+          sbom: false
+
+      - name: Collect build outputs
+        id: build-output
+        env:
+          BLACKSMITH_DIGEST: ${{ steps.build-blacksmith.outputs.digest }}
+          PORTABLE_DIGEST: ${{ steps.build-portable.outputs.digest }}
+        run: |
+          DIGEST="${BLACKSMITH_DIGEST:-$PORTABLE_DIGEST}"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Digest: $DIGEST"
 
       - name: Extract single deploy tag
         id: single-tag
@@ -355,7 +438,8 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Image:** \`${{ steps.image-name.outputs.name }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Runner:** \`${{ inputs.runner || 'blacksmith-2vcpu-ubuntu-2204' }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Build engine:** \`${{ steps.build-engine.outputs.engine }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest:** \`${{ steps.build-output.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
