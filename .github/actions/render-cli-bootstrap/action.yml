@@ -70,6 +70,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        VERSION="$(render --version 2>/dev/null | head -1)"
+        VERSION="$(render --version 2>/dev/null || true)"
+        VERSION="${VERSION%%$'\n'*}"
         echo "version=$VERSION" >> "$GITHUB_OUTPUT"
         echo "Render CLI: $VERSION"

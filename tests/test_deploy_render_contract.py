@@ -109,6 +109,8 @@ class DeployRenderContractTest(unittest.TestCase):
         self.assertIn("actions/cache@v4", RENDER_BOOTSTRAP_TEXT)
         self.assertIn("command -v render", RENDER_BOOTSTRAP_TEXT)
         self.assertIn("raw.githubusercontent.com/render-oss/cli", RENDER_BOOTSTRAP_TEXT)
+        self.assertNotIn("head -1", RENDER_BOOTSTRAP_TEXT)
+        self.assertIn("VERSION=\"${VERSION%%$'\\n'*}\"", RENDER_BOOTSTRAP_TEXT)
 
 
 if __name__ == "__main__":
