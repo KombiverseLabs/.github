@@ -1,1 +1,6 @@
 tests/__pycache__/
+local-dev/kombify-gates.local.json
+local-dev/.env*.local
+local-dev/reports/
+local-dev/logs/
+local-dev/state/

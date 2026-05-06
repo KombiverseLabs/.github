@@ -1,0 +1,377 @@
+{
+  "version": 1,
+  "schema": "kombify-local-gates",
+  "workspaceRoot": "..",
+  "aspireAppHost": "kombify-Core/aspire/apphost.cs",
+  "requiredMiseTasks": [
+    "setup",
+    "doctor",
+    "build",
+    "test",
+    "check",
+    "health",
+    "preview:local",
+    "preflight:quick",
+    "preflight:release",
+    "preflight:deploy",
+    "aspire:start",
+    "aspire:full"
+  ],
+  "optionalMiseTasks": [
+    "aspire:saas",
+    "aspire:selfhosted",
+    "aspire:hybrid"
+  ],
+  "aspireProfiles": {
+    "local": "local-minimal",
+    "saas": "local-saas-like",
+    "selfhosted": "local-minimal",
+    "hybrid": "local-hybrid",
+    "integration": "integration-ghcr"
+  },
+  "repos": [
+    {
+      "id": "kombify-blog",
+      "name": "kombify Blog",
+      "path": "kombify-Blog",
+      "aspireFocusService": "blog",
+      "components": [
+        {
+          "id": "site",
+          "packaging": "standalone",
+          "runtime": "docker-compose",
+          "modes": ["local", "saas"],
+          "composeFile": "docker-compose.yml",
+          "manualUrls": ["http://localhost:5280"],
+          "healthUrls": ["http://localhost:5280"],
+          "gates": {
+            "quick": { "miseTask": "preflight:quick" },
+            "standard": { "miseTask": "preflight:release" },
+            "full": { "miseTask": "preflight:deploy", "aspireProfile": "local-saas-like" }
+          },
+          "aspire": {
+            "focusService": "blog",
+            "tasks": {
+              "local": "aspire:start",
+              "saas": "aspire:full"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "kombify-cloud",
+      "name": "kombify Cloud",
+      "path": "kombify-Cloud",
+      "aspireFocusService": "cloud",
+      "components": [
+        {
+          "id": "portal",
+          "packaging": "embedded",
+          "runtime": "aspire",
+          "modes": ["local", "saas", "hybrid", "integration"],
+          "composeFile": "docker-compose.local.yml",
+          "manualUrls": ["http://localhost:5290"],
+          "healthUrls": ["http://localhost:5290/health"],
+          "healthUrlsByMode": {
+            "local": ["http://localhost:5290/health"],
+            "saas": ["http://localhost:5173/health"],
+            "hybrid": ["http://localhost:5290/health"],
+            "integration": ["http://localhost:5290/health"]
+          },
+          "gates": {
+            "quick": { "miseTask": "preflight:quick" },
+            "standard": { "miseTask": "preflight:release" },
+            "full": { "miseTask": "preflight:deploy", "aspireProfile": "local-saas-like" }
+          },
+          "aspire": {
+            "focusService": "cloud",
+            "tasks": {
+              "local": "aspire:start",
+              "saas": "aspire:full",
+              "hybrid": "aspire:hybrid"
+            },
+            "profiles": {
+              "local": "local-minimal",
+              "saas": "local-saas-like",
+              "hybrid": "local-hybrid"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "kombify-techstack",
+      "name": "kombify Techstack",
+      "path": "kombify-Techstack",
+      "aspireFocusService": "stack",
+      "components": [
+        {
+          "id": "api-ui",
+          "packaging": "standalone",
+          "runtime": "docker-compose",
+          "modes": ["local", "selfhosted", "hybrid"],
+          "composeFile": "docker-compose.yml",
+          "manualUrls": ["http://localhost:5260", "http://localhost:5261"],
+          "healthUrls": ["http://localhost:5260/api/v1/health", "http://localhost:5261"],
+          "gates": {
+            "quick": { "miseTask": "preflight:quick" },
+            "standard": { "miseTask": "preflight:release" },
+            "full": { "miseTask": "preflight:deploy", "aspireProfile": "local-hybrid" }
+          },
+          "aspire": {
+            "focusService": "stack",
+            "tasks": {
+              "local": "aspire:start",
+              "selfhosted": "aspire:selfhosted",
+              "hybrid": "aspire:hybrid"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "kombify-db",
+      "name": "kombify DB",
+      "path": "kombify-DB",
+      "aspireFocusService": "db",
+      "components": [
+        {
+          "id": "postgres-schema",
+          "packaging": "standalone",
+          "runtime": "docker-compose",
+          "modes": ["local"],
+          "composeFile": "docker-compose.yml",
+          "manualUrls": ["postgres://localhost:5432/kombify"],
+          "healthUrls": [],
+          "gates": {
+            "quick": { "miseTask": "preflight:quick" },
+            "standard": { "miseTask": "preflight:release" },
+            "full": { "miseTask": "preflight:deploy", "aspireProfile": "local-minimal" }
+          },
+          "aspire": {
+            "focusService": "db"
+          }
+        }
+      ]
+    },
+    {
+      "id": "kombify-core",
+      "name": "kombify Core",
+      "path": "kombify-Core",
+      "aspireFocusService": "core",
+      "components": [
+        {
+          "id": "ui-lab",
+          "packaging": "standalone",
+          "runtime": "docker-compose",
+          "modes": ["local"],
+          "composeFile": "ui-lab/docker-compose.yml",
+          "manualUrls": ["http://localhost:5293"],
+          "healthUrls": ["http://localhost:5293/api/health"],
+          "gates": {
+            "quick": { "miseTask": "preflight:quick" },
+            "standard": { "miseTask": "preflight:release" },
+            "full": { "miseTask": "preflight:deploy", "aspireProfile": "local-minimal" }
+          },
+          "aspire": {
+            "focusService": "core"
+          }
+        }
+      ]
+    },
+    {
+      "id": "kombify-administration",
+      "name": "kombify Administration",
+      "path": "kombify-Administration",
+      "aspireFocusService": "admin",
+      "components": [
+        {
+          "id": "admin",
+          "packaging": "embedded",
+          "runtime": "aspire",
+          "modes": ["local", "saas", "hybrid"],
+          "composeFile": "docker-compose.yml",
+          "manualUrls": ["http://localhost:4300"],
+          "healthUrls": ["http://localhost:4300"],
+          "gates": {
+            "quick": { "miseTask": "preflight:quick" },
+            "standard": { "miseTask": "preflight:release" },
+            "full": { "miseTask": "preflight:deploy", "aspireProfile": "local-saas-like" }
+          },
+          "aspire": {
+            "focusService": "admin",
+            "tasks": {
+              "local": "aspire:start",
+              "saas": "aspire:full",
+              "hybrid": "aspire:hybrid"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "kombify-ai",
+      "name": "kombify AI",
+      "path": "kombify-AI",
+      "aspireFocusService": "ai",
+      "components": [
+        {
+          "id": "backend-portal",
+          "packaging": "embedded",
+          "runtime": "aspire",
+          "modes": ["local", "saas", "hybrid"],
+          "composeFile": "docker-compose.local.yml",
+          "manualUrls": ["http://localhost:8090", "http://localhost:4292"],
+          "healthUrls": ["http://localhost:8090/health"],
+          "gates": {
+            "quick": { "miseTask": "preflight:quick" },
+            "standard": { "miseTask": "preflight:release" },
+            "full": { "miseTask": "preflight:deploy", "aspireProfile": "local-saas-like" }
+          },
+          "aspire": {
+            "focusService": "ai",
+            "tasks": {
+              "local": "aspire:start",
+              "saas": "aspire:full",
+              "hybrid": "aspire:hybrid"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "kombify-desk",
+      "name": "kombify Desk",
+      "path": "kombify-Desk",
+      "components": [
+        {
+          "id": "worker-frontend",
+          "packaging": "standalone",
+          "runtime": "docker-compose",
+          "modes": ["local", "selfhosted"],
+          "composeFile": "docker-compose.yml",
+          "manualUrls": ["http://localhost:4400", "http://localhost:8787"],
+          "healthUrls": [],
+          "gates": {
+            "quick": { "miseTask": "preflight:quick" },
+            "standard": { "miseTask": "preflight:release" },
+            "full": { "miseTask": "preflight:deploy" }
+          }
+        }
+      ]
+    },
+    {
+      "id": "kombify-gateway",
+      "name": "kombify Gateway",
+      "path": "kombify-Gateway",
+      "aspireFocusService": "gateway",
+      "components": [
+        {
+          "id": "kong-edge",
+          "packaging": "embedded",
+          "runtime": "aspire",
+          "modes": ["local", "saas", "hybrid"],
+          "composeFile": "docker-compose.yml",
+          "manualUrls": ["http://localhost:8000", "http://localhost:8001", "http://localhost:8002"],
+          "healthUrls": ["http://localhost:8000/gateway/health"],
+          "gates": {
+            "quick": { "miseTask": "preflight:quick" },
+            "standard": { "miseTask": "preflight:release" },
+            "full": { "miseTask": "preflight:deploy", "aspireProfile": "local-saas-like" }
+          },
+          "aspire": {
+            "focusService": "gateway",
+            "tasks": {
+              "local": "aspire:start",
+              "saas": "aspire:full",
+              "hybrid": "aspire:hybrid"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "kombify-simulate",
+      "name": "kombify Simulate",
+      "path": "kombify-simulate",
+      "aspireFocusService": "sim",
+      "components": [
+        {
+          "id": "sim",
+          "packaging": "standalone",
+          "runtime": "docker-compose",
+          "modes": ["local", "saas", "selfhosted", "hybrid"],
+          "composeFile": "docker-compose.yml",
+          "manualUrls": ["http://localhost:5270"],
+          "healthUrls": ["http://localhost:5270/api/v1/health"],
+          "gates": {
+            "quick": { "miseTask": "preflight:quick" },
+            "standard": { "miseTask": "preflight:release" },
+            "full": { "miseTask": "preflight:deploy", "aspireProfile": "local-hybrid" }
+          },
+          "aspire": {
+            "focusService": "sim",
+            "tasks": {
+              "local": "aspire:start",
+              "saas": "aspire:full",
+              "selfhosted": "aspire:selfhosted",
+              "hybrid": "aspire:hybrid"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "kombify-speechkit",
+      "name": "kombify SpeechKit",
+      "path": "kombify-SpeechKit",
+      "components": [
+        {
+          "id": "server-app",
+          "packaging": "standalone",
+          "runtime": "docker-compose",
+          "modes": ["local", "selfhosted"],
+          "composeFile": "deploy/docker/docker-compose.yml",
+          "manualUrls": ["http://localhost:8080"],
+          "healthUrls": ["http://localhost:8080/healthz"],
+          "gates": {
+            "quick": { "miseTask": "preflight:quick" },
+            "standard": { "miseTask": "preflight:release" },
+            "full": { "miseTask": "preflight:deploy" }
+          }
+        }
+      ]
+    },
+    {
+      "id": "kombify-stackkits",
+      "name": "kombify StackKits",
+      "path": "kombify-StackKits",
+      "aspireFocusService": "stackkits",
+      "components": [
+        {
+          "id": "orchestrator",
+          "packaging": "standalone",
+          "runtime": "docker-compose",
+          "modes": ["local", "selfhosted", "hybrid"],
+          "composeFile": "docker-compose.yml",
+          "manualUrls": ["http://localhost:8082", "http://localhost:9000"],
+          "healthUrls": ["http://localhost:8082/health"],
+          "gates": {
+            "quick": { "miseTask": "preflight:quick" },
+            "standard": { "miseTask": "preflight:release" },
+            "full": { "miseTask": "preflight:deploy", "aspireProfile": "local-hybrid" }
+          },
+          "aspire": {
+            "focusService": "stackkits",
+            "tasks": {
+              "local": "aspire:start",
+              "selfhosted": "aspire:selfhosted",
+              "hybrid": "aspire:hybrid"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

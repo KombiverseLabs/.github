@@ -10,6 +10,11 @@ on:
         description: "Runner registration token (generate with: gh api -X POST orgs/KombiverseLabs/actions/runners/registration-token --jq .token)"
         required: true
         type: string
+      runner-version:
+        description: "actions-runner version to install"
+        required: false
+        type: string
+        default: "2.333.0"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -27,11 +32,12 @@ jobs:
       - name: Install runner 2
         env:
           REG_TOKEN: ${{ inputs.reg-token }}
+          RUNNER_VERSION: ${{ inputs.runner-version }}
         run: |
           set -euo pipefail
 
           RUNNER_DIR="$HOME/runners/kombiverse-labs-2"
-          RUNNER_VERSION="2.323.0"
+          RUNNER_VERSION="${RUNNER_VERSION:-2.333.0}"
 
           echo "=== Creating runner directory ==="
           mkdir -p "$RUNNER_DIR"

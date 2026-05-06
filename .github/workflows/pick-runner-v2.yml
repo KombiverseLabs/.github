@@ -1,56 +1,199 @@
-# Reusable: Runtime runner selection (v2 — Blacksmith default).
+# Reusable: Runtime runner selection (v2).
 #
 # HOW IT WORKS
-# ────────────
-# Returns the runner label to use in downstream jobs.
-# Default: Blacksmith cloud runners (fast, ephemeral, Docker pre-installed).
-# Fallback: `kombi` self-hosted runners on IONOS server + Marcel's PC.
+# ------------
+# Returns one runner label for downstream jobs.
+# Default: `kombi` self-hosted runners.
+# Fallback: Blacksmith 2 vCPU cloud runner.
+# Last resort: GitHub-hosted ubuntu-latest.
 #
-# Runner landscape (2026-04):
-# - `blacksmith-2vcpu-ubuntu-2204` (primary) → Blacksmith cloud runners
-# - `kombi` (fallback)                       → 4 dedicated runners on kombi-server + 2 on Marcel's PC
-# - `ubuntu-latest` (last resort)            → GitHub Hosted (uses minutes, avoid)
+# The picker itself runs on a probe runner, so an offline self-hosted runner
+# cannot block fallback selection by leaving this job queued.
 #
-# Centrally controlled via org variables: CI_RUNNER, BUILD_RUNNER, DEPLOY_RUNNER
-# - `ubuntu-latest`                          → GitHub Hosted (uses minutes, avoid)
-#
-# NOTE: `kombify-ionos` is the production host — never use it as CI capacity.
+# Centrally controlled via org variables: CI_RUNNER, BUILD_RUNNER, DEPLOY_RUNNER.
+# NOTE: `kombify-ionos` is the production host; never use it as CI capacity.
 name: Pick Runner v2
 
 on:
   workflow_call:
     inputs:
       preferred:
-        description: 'Runner label to use. Defaults to blacksmith-2vcpu-ubuntu-2204.'
+        description: "Preferred runner label. Defaults to kombi self-hosted."
         required: false
         type: string
-        default: 'blacksmith-2vcpu-ubuntu-2204'
+        default: "kombi"
+      fallback:
+        description: "Fallback runner label when the preferred self-hosted runner is unavailable."
+        required: false
+        type: string
+        default: "blacksmith-2vcpu-ubuntu-2204"
+      last-resort:
+        description: "Final fallback runner label."
+        required: false
+        type: string
+        default: "ubuntu-latest"
+      probe-runner:
+        description: "Stable runner used only to inspect runner availability."
+        required: false
+        type: string
+        default: "ubuntu-latest"
+      require-idle:
+        description: "Only select a self-hosted runner when at least one matching runner is idle."
+        required: false
+        type: boolean
+        default: true
     secrets:
       GH_PAT:
         required: false
     outputs:
       runner:
-        description: 'The selected runner label to use in subsequent jobs'
+        description: "The selected runner label to use in subsequent jobs."
         value: ${{ jobs.pick.outputs.runner }}
+      source:
+        description: "Which candidate produced the selected runner."
+        value: ${{ jobs.pick.outputs.source }}
+      reason:
+        description: "Human-readable selection reason."
+        value: ${{ jobs.pick.outputs.reason }}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.run_id }}
   cancel-in-progress: true
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
   pick:
     name: Select runner
-    runs-on: ${{ inputs.preferred || 'blacksmith-2vcpu-ubuntu-2204' }}
-    timeout-minutes: 2
+    runs-on: ${{ inputs.probe-runner || 'ubuntu-latest' }}
+    timeout-minutes: 3
     outputs:
       runner: ${{ steps.select.outputs.runner }}
+      source: ${{ steps.select.outputs.source }}
+      reason: ${{ steps.select.outputs.reason }}
     steps:
-      - name: Output selected runner
+      - name: Select available runner
         id: select
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT != '' && secrets.GH_PAT || github.token }}
+          PREFERRED_RUNNER: ${{ inputs.preferred || 'kombi' }}
+          FALLBACK_RUNNER: ${{ inputs.fallback || 'blacksmith-2vcpu-ubuntu-2204' }}
+          LAST_RESORT_RUNNER: ${{ inputs.last-resort || 'ubuntu-latest' }}
+          REQUIRE_IDLE: ${{ inputs.require-idle }}
         run: |
-          RUNNER="${{ inputs.preferred || 'blacksmith-2vcpu-ubuntu-2204' }}"
-          echo "runner=$RUNNER" >> "$GITHUB_OUTPUT"
-          echo "→ Selected: $RUNNER"
+          set -euo pipefail
+
+          python3 <<'PYEOF'
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.request
+
+          hosted_prefixes = ("ubuntu-", "windows-", "macos-", "blacksmith-")
+          repository = os.environ["GITHUB_REPOSITORY"]
+          owner, repo = repository.split("/", 1)
+          token = os.environ.get("GH_TOKEN", "")
+          require_idle = os.environ.get("REQUIRE_IDLE", "true").lower() == "true"
+
+          def normalize(label):
+              return (label or "").strip()
+
+          def is_hosted(label):
+              label = normalize(label)
+              return label.startswith(hosted_prefixes)
+
+          def requested_labels(label):
+              return [item for item in re.split(r"[\s,]+", normalize(label)) if item]
+
+          def github_json(path):
+              request = urllib.request.Request(
+                  f"https://api.github.com{path}",
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=10) as response:
+                  return json.load(response)
+
+          def load_runners():
+              runners = []
+              errors = []
+              paths = [
+                  f"/repos/{owner}/{repo}/actions/runners?per_page=100",
+                  f"/orgs/{owner}/actions/runners?per_page=100",
+              ]
+              for path in paths:
+                  try:
+                      runners.extend(github_json(path).get("runners", []))
+                  except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as error:
+                      errors.append(f"{path}: {error}")
+              if errors:
+                  print("Runner API warnings:", file=sys.stderr)
+                  for error in errors:
+                      print(f"- {error}", file=sys.stderr)
+              return runners
+
+          all_runners = None
+
+          def self_hosted_available(label):
+              global all_runners
+              if all_runners is None:
+                  all_runners = load_runners()
+              wanted = set(requested_labels(label))
+              if not wanted:
+                  return False
+              for runner in all_runners:
+                  labels = {entry.get("name", "") for entry in runner.get("labels", [])}
+                  if not wanted.issubset(labels):
+                      continue
+                  if runner.get('status') == 'online' and (not require_idle or not runner.get('busy')):
+                      return True
+              return False
+
+          candidates = [
+              ("preferred", normalize(os.environ.get("PREFERRED_RUNNER"))),
+              ("fallback", normalize(os.environ.get("FALLBACK_RUNNER"))),
+              ("last-resort", normalize(os.environ.get("LAST_RESORT_RUNNER"))),
+          ]
+
+          selected = ""
+          source = ""
+          reason = ""
+
+          for candidate_source, runner_label in candidates:
+              if not runner_label:
+                  continue
+              if is_hosted(runner_label):
+                  selected = runner_label
+                  source = candidate_source
+                  reason = f"{runner_label} is hosted capacity"
+                  break
+              if self_hosted_available(runner_label):
+                  selected = runner_label
+                  source = candidate_source
+                  idle_word = "idle " if require_idle else ""
+                  reason = f"{runner_label} has at least one online {idle_word}self-hosted runner"
+                  break
+              print(f"{candidate_source} runner {runner_label} is not currently available")
+
+          if not selected:
+              selected = normalize(os.environ.get("LAST_RESORT_RUNNER")) or "ubuntu-latest"
+              source = "last-resort"
+              reason = "no preferred or fallback runner was available"
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              print(f"runner={selected}", file=handle)
+              print(f"source={source}", file=handle)
+              print(f"reason={reason}", file=handle)
+
+          print(f"Selected runner: {selected}")
+          print(f"Source: {source}")
+          print(f"Reason: {reason}")
+          PYEOF

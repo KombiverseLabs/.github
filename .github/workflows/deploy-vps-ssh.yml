@@ -1,8 +1,9 @@
 name: Deploy via SSH (VPS Docker Compose)
 # SSH-based deployment to a VPS running Docker Compose.
 # SSH credentials (host, user, private key) are fetched from Doppler.
-# Supports both production (kombify-io/prd_infra) and dev (kombify-ionos-dev/dev) VPS.
-# Used for services that cannot run on Render (e.g. kombify-Sim: requires Docker socket + privileged mode).
+# Use only for documented VPS exceptions, currently kombify-Simulate.
+# All other production and preview deployments must use Render-native deploys or Render APIs.
+# kombify.dev / kombify-ionos-dev is not a general dev deployment target.
 
 on:
   workflow_call:
@@ -117,6 +118,13 @@ jobs:
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 10
     steps:
+      - name: Block retired kombify.dev dev deployments
+        if: inputs.doppler-project == 'kombify-ionos-dev'
+        shell: bash
+        run: |
+          echo "::error::kombify.dev / kombify-ionos-dev dev deployments are retired. Use Render production/preview deployments. Only kombify-Simulate may use VPS deployment, via kombify-systems host credentials."
+          exit 1
+
       - uses: actions/checkout@v4
         if: inputs.compose-file-source != ''
 

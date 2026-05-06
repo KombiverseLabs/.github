@@ -11,7 +11,7 @@ name: Quick Smoke (Deploy Gate)
 #       needs: deploy
 #       uses: KombiverseLabs/.github/.github/workflows/quick-smoke.yml@main
 #       with:
-#         service-url: https://blog.kombify.dev
+#         service-url: https://blog.kombify.io
 #         health-path: /health
 #         smoke-expected-content: "kombify"
 #
@@ -21,7 +21,7 @@ on:
   workflow_call:
     inputs:
       service-url:
-        description: "Base service URL (e.g. https://blog.kombify.dev)"
+        description: "Base service URL (e.g. https://blog.kombify.io)"
         required: true
         type: string
       health-path:
