@@ -136,11 +136,13 @@ jobs:
 
       - name: Summary
         run: |
-          echo "### GHCR Auth Synced" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Key | Value |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|-----|-------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Runner | \`${{ inputs.runner }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| User | \`$(whoami)\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Bootstrapped From GitHub | \`${{ steps.ghcr.outputs.used_fallback }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Validation Image | \`${{ inputs.validation-image || 'n/a' }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### GHCR Auth Synced"
+            echo ""
+            echo "| Key | Value |"
+            echo "|-----|-------|"
+            echo "| Runner | \`${{ inputs.runner }}\` |"
+            echo "| User | \`$(whoami)\` |"
+            echo "| Bootstrapped From GitHub | \`${{ steps.ghcr.outputs.used_fallback }}\` |"
+            echo "| Validation Image | \`${{ inputs.validation-image || 'n/a' }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

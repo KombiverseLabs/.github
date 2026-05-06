@@ -52,10 +52,12 @@ jobs:
           KEEP="${KEEP_VERSIONS}"
           DRY="${DRY_RUN}"
 
-          echo "### GHCR Cleanup Report" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Package | Versions Before | Deleted | Kept | Protected |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|---------|----------------|---------|------|-----------|" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### GHCR Cleanup Report"
+            echo ""
+            echo "| Package | Versions Before | Deleted | Kept | Protected |"
+            echo "|---------|----------------|---------|------|-----------|"
+          } >> "$GITHUB_STEP_SUMMARY"
 
           TOTAL_DELETED=0
 
@@ -132,8 +134,10 @@ jobs:
             echo "| ${PKG} | ${TOTAL} | ${DELETE_COUNT} | ${KEPT_COUNT} | ${PROTECTED_COUNT} |" >> "$GITHUB_STEP_SUMMARY"
           done
 
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Total deleted:** ${TOTAL_DELETED}" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Keep policy:** ${KEEP} most recent per package + protected tags" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo ""
+            echo "**Total deleted:** ${TOTAL_DELETED}"
+            echo "**Keep policy:** ${KEEP} most recent per package + protected tags"
+          } >> "$GITHUB_STEP_SUMMARY"
           echo ""
           echo "Done. Deleted ${TOTAL_DELETED} total versions across all packages."

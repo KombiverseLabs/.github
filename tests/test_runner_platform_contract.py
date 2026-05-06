@@ -80,7 +80,8 @@ class RunnerPlatformContractTest(unittest.TestCase):
         self.assertNotIn("rhysd/actionlint@v1", VALIDATE_REUSABLE_WORKFLOWS)
         self.assertIn("go install github.com/rhysd/actionlint/cmd/actionlint@", VALIDATE_REUSABLE_WORKFLOWS)
         self.assertIn("cache: false", VALIDATE_REUSABLE_WORKFLOWS)
-        self.assertIn("          actionlint", VALIDATE_REUSABLE_WORKFLOWS)
+        self.assertIn("find .github/workflows -maxdepth 1", VALIDATE_REUSABLE_WORKFLOWS)
+        self.assertIn('actionlint "${workflow_files[@]}"', VALIDATE_REUSABLE_WORKFLOWS)
 
 
 if __name__ == "__main__":

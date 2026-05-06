@@ -160,5 +160,7 @@ jobs:
       - name: Stop Aspire
         if: always()
         run: |
-          kill $ASPIRE_PID 2>/dev/null || true
+          if [ -n "${ASPIRE_PID:-}" ]; then
+            kill "$ASPIRE_PID" 2>/dev/null || true
+          fi
           echo "Aspire stopped"

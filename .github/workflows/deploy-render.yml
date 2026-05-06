@@ -119,9 +119,6 @@ jobs:
           PRESERVE_RUNTIME_ENV_EXTRAS: ${{ inputs.preserve-runtime-env-extras }}
           RUNTIME_ENV_JSON: ${{ runner.temp }}/render-runtime-env.json
         run: |
-          SERVICE_ID="${{ steps.resolve.outputs.service_id }}"
-          RUNTIME_ENV_JSON="$RUNNER_TEMP/render-runtime-env.json"
-
           doppler secrets download \
             --format json \
             --no-file \
