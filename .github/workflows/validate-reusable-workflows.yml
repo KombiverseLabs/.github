@@ -5,11 +5,17 @@ on:
     paths:
       - ".github/workflows/*.yml"
       - ".github/workflows/*.yaml"
+      - ".github/actions/**/*.yml"
+      - ".github/actions/**/*.yaml"
+      - "tests/test_*contract.py"
   push:
     branches: [main]
     paths:
       - ".github/workflows/*.yml"
       - ".github/workflows/*.yaml"
+      - ".github/actions/**/*.yml"
+      - ".github/actions/**/*.yaml"
+      - "tests/test_*contract.py"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -25,7 +31,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Lint workflow files
-        uses: rhysd/actionlint@v1
+      - uses: actions/setup-go@v5
         with:
-          shellcheck: true
+          go-version: "1.24.x"
+      - name: Lint workflow files
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          actionlint .github/workflows

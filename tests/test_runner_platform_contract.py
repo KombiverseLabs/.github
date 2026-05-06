@@ -10,6 +10,9 @@ RUNNER_HEALTH = (ROOT / "vps-bootstrap" / "scripts" / "runner-health-check.sh").
 PICK_RUNNER_WORKFLOW = (ROOT / ".github" / "workflows" / "pick-runner-v2.yml").read_text(encoding="utf-8")
 BUILD_AND_PUSH_WORKFLOW = (ROOT / ".github" / "workflows" / "build-and-push.yml").read_text(encoding="utf-8")
 SETUP_RUNNER_TWO_WORKFLOW = (ROOT / ".github" / "workflows" / "setup-runner-2.yml").read_text(encoding="utf-8")
+VALIDATE_REUSABLE_WORKFLOWS = (
+    ROOT / ".github" / "workflows" / "validate-reusable-workflows.yml"
+).read_text(encoding="utf-8")
 
 
 class RunnerPlatformContractTest(unittest.TestCase):
@@ -72,6 +75,11 @@ class RunnerPlatformContractTest(unittest.TestCase):
         self.assertIn("runner-version:", SETUP_RUNNER_TWO_WORKFLOW)
         self.assertIn('default: "2.333.0"', SETUP_RUNNER_TWO_WORKFLOW)
         self.assertIn('RUNNER_VERSION="${RUNNER_VERSION:-2.333.0}"', SETUP_RUNNER_TWO_WORKFLOW)
+
+    def test_reusable_workflow_validator_installs_actionlint_directly(self) -> None:
+        self.assertNotIn("rhysd/actionlint@v1", VALIDATE_REUSABLE_WORKFLOWS)
+        self.assertIn("go install github.com/rhysd/actionlint/cmd/actionlint@", VALIDATE_REUSABLE_WORKFLOWS)
+        self.assertIn("actionlint .github/workflows", VALIDATE_REUSABLE_WORKFLOWS)
 
 
 if __name__ == "__main__":
