@@ -79,7 +79,8 @@ class RunnerPlatformContractTest(unittest.TestCase):
     def test_reusable_workflow_validator_installs_actionlint_directly(self) -> None:
         self.assertNotIn("rhysd/actionlint@v1", VALIDATE_REUSABLE_WORKFLOWS)
         self.assertIn("go install github.com/rhysd/actionlint/cmd/actionlint@", VALIDATE_REUSABLE_WORKFLOWS)
-        self.assertIn("actionlint .github/workflows", VALIDATE_REUSABLE_WORKFLOWS)
+        self.assertIn("cache: false", VALIDATE_REUSABLE_WORKFLOWS)
+        self.assertIn("          actionlint", VALIDATE_REUSABLE_WORKFLOWS)
 
 
 if __name__ == "__main__":
