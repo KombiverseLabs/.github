@@ -1,0 +1,159 @@
+name: Render Preview Comment
+# Posts (or updates) a sticky PR comment with the Render preview URL.
+# Reusable workflow — call from each Render-Tier-3 repo's
+# .github/workflows/pr-render-preview.yml.
+#
+# See kombify Core/standards/DEPLOYMENT-STANDARD.md §12 (Render-Deploy Hardening),
+# Regel 5: PR-Template enthaelt Render-Preview-URL.
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: |
+          Render service name (e.g. "kombify-cloud-native"). Used to filter
+          deployments when multiple services post against the same PR.
+        required: false
+        type: string
+        default: ""
+      staging-url:
+        description: |
+          Optional staging URL shown alongside the per-PR preview URL. When set,
+          a single line "Staging URL: <url>" is added to the sticky comment.
+        required: false
+        type: string
+        default: ""
+      runner:
+        description: "Runner label"
+        required: false
+        type: string
+        default: "blacksmith-2vcpu-ubuntu-2204"
+
+permissions:
+  contents: read
+  deployments: read
+  pull-requests: write
+
+jobs:
+  comment:
+    name: Update Preview Comment
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 5
+    steps:
+      - name: Resolve PR head SHA + number
+        id: pr
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const event = context.eventName;
+            let prNumber, headSha;
+            if (event === "pull_request") {
+              prNumber = context.payload.pull_request.number;
+              headSha = context.payload.pull_request.head.sha;
+            } else if (event === "deployment_status") {
+              const sha = context.payload.deployment.sha;
+              const { data: pulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: sha,
+              });
+              const open = pulls.find((p) => p.state === "open");
+              if (!open) {
+                core.info(`No open PR for SHA ${sha} -- skipping comment update.`);
+                core.setOutput("skip", "true");
+                return;
+              }
+              prNumber = open.number;
+              headSha = sha;
+            } else {
+              core.info(`Unsupported event ${event} -- skipping.`);
+              core.setOutput("skip", "true");
+              return;
+            }
+            core.setOutput("number", String(prNumber));
+            core.setOutput("sha", headSha);
+
+      - name: Fetch latest Render preview URL
+        id: preview
+        if: steps.pr.outputs.skip != 'true'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        env:
+          SERVICE_NAME: ${{ inputs.service-name }}
+          HEAD_SHA: ${{ steps.pr.outputs.sha }}
+        with:
+          script: |
+            const sha = process.env.HEAD_SHA;
+            const serviceFilter = (process.env.SERVICE_NAME || "").trim();
+
+            const { data: deployments } = await github.rest.repos.listDeployments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha,
+              per_page: 50,
+            });
+
+            // Render deployments use environments like "preview/<service>" or
+            // "ci/render-preview-...". Filter when service-name is set.
+            const filtered = serviceFilter
+              ? deployments.filter((d) => (d.environment || "").includes(serviceFilter))
+              : deployments;
+
+            // Most recent deployment with a successful status wins.
+            for (const dep of filtered) {
+              const { data: statuses } = await github.rest.repos.listDeploymentStatuses({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                deployment_id: dep.id,
+                per_page: 10,
+              });
+              const success = statuses.find((s) => s.state === "success");
+              if (success && (success.environment_url || success.target_url)) {
+                core.setOutput("url", success.environment_url || success.target_url);
+                core.setOutput("environment", dep.environment);
+                core.setOutput("state", "success");
+                return;
+              }
+              if (statuses.length > 0) {
+                core.setOutput("state", statuses[0].state);
+              }
+            }
+            core.setOutput("state", "pending");
+
+      - name: Compose comment body
+        id: body
+        if: steps.pr.outputs.skip != 'true'
+        shell: bash
+        env:
+          PREVIEW_URL: ${{ steps.preview.outputs.url }}
+          PREVIEW_STATE: ${{ steps.preview.outputs.state }}
+          PREVIEW_ENV: ${{ steps.preview.outputs.environment }}
+          STAGING_URL: ${{ inputs.staging-url }}
+          HEAD_SHA: ${{ steps.pr.outputs.sha }}
+        run: |
+          {
+            echo "body<<EOF"
+            echo "<!-- render-preview-comment -->"
+            echo "## Render Preview"
+            echo ""
+            if [ -n "$PREVIEW_URL" ]; then
+              echo "- Preview URL: $PREVIEW_URL"
+              [ -n "$PREVIEW_ENV" ] && echo "- Environment: \`$PREVIEW_ENV\`"
+            else
+              echo "- Preview URL: _pending_ (Render is still building or no deployment yet)"
+            fi
+            if [ -n "$STAGING_URL" ]; then
+              echo "- Staging URL (after merge): $STAGING_URL"
+            fi
+            echo "- Head SHA: \`$HEAD_SHA\`"
+            echo ""
+            echo "_Auto-updated on every push and when Render reports a successful deployment._"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upsert sticky PR comment
+        if: steps.pr.outputs.skip != 'true'
+        uses: marocchino/sticky-pull-request-comment@d2ad0de260ae8b0235ce059e63f2949ba9e05943
+        with:
+          number: ${{ steps.pr.outputs.number }}
+          header: render-preview-comment
+          message: ${{ steps.body.outputs.body }}

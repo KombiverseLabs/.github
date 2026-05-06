@@ -1,0 +1,131 @@
+name: Verify Merged-PR SHA + Required Checks
+description: |
+  Verifies that a deploy-dispatch SHA is safe to deploy:
+
+  1. The dispatched preflight_sha equals github.sha (no drift between dispatch
+     and checkout).
+  2. All required GitHub Checks for the SHA have conclusion=success or skipped.
+  3. The SHA originates from a merged pull request on `main` (state=closed,
+     merged=true) — direct pushes are rejected unless allow-direct-push=true.
+
+  This is the canonical pre-deploy verification step for kombify Render-Tier-3
+  repos. See kombify Core/standards/DEPLOYMENT-STANDARD.md §12 (Render-Deploy
+  Hardening).
+
+inputs:
+  preflight_sha:
+    description: "Commit SHA dispatched by the deploy workflow (workflow_dispatch input)."
+    required: true
+  required-checks:
+    description: |
+      Comma-separated list of GitHub Check names that must be green for the SHA.
+      Defaults to "CI Checks,security-passed". Repos with extra build/scan jobs
+      (e.g. Cloud, AI) override via vars.DEPLOY_REQUIRED_CHECKS.
+    required: false
+    default: "CI Checks,security-passed"
+  allow-direct-push:
+    description: |
+      When "true", the merged-PR check is skipped and direct-pushed SHAs are
+      accepted. Reserved for emergency hotfix workflows. The dispatch input
+      MUST be visible in the audit log.
+    required: false
+    default: "false"
+  github-token:
+    description: "Token used for repo + checks API calls. Defaults to github.token."
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Verify dispatch SHA equals checkout SHA
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -z "${{ inputs.preflight_sha }}" ]; then
+          echo "::error::preflight_sha input is empty"
+          exit 1
+        fi
+        if [ "${{ github.sha }}" != "${{ inputs.preflight_sha }}" ]; then
+          echo "::error::preflight_sha mismatch: github.sha=${{ github.sha }} input=${{ inputs.preflight_sha }}"
+          exit 1
+        fi
+        echo "preflight_sha=${{ inputs.preflight_sha }} matches github.sha"
+
+    - name: Verify required checks are green
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+      env:
+        REQUIRED_CHECKS: ${{ inputs.required-checks }}
+        SHA: ${{ inputs.preflight_sha }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const required = (process.env.REQUIRED_CHECKS || "")
+            .split(",")
+            .map((name) => name.trim())
+            .filter(Boolean);
+          const sha = process.env.SHA;
+          const checkRuns = await github.paginate(github.rest.checks.listForRef, {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            ref: sha,
+            per_page: 100,
+          });
+
+          let failed = false;
+          for (const name of required) {
+            const needle = name.toLowerCase();
+            const checkRun = checkRuns.find((run) => run.name.toLowerCase().includes(needle));
+            const conclusion = checkRun?.conclusion || "";
+            if (conclusion !== "success" && conclusion !== "skipped") {
+              core.error(
+                `Required check '${name}' is not green for ${sha} (conclusion: ${conclusion || "missing"}).`
+              );
+              failed = true;
+              continue;
+            }
+            core.info(`Required check '${name}' is ${conclusion}.`);
+          }
+
+          if (failed) {
+            core.info("Observed check runs for SHA:");
+            for (const run of checkRuns) {
+              core.info(`  ${run.name}: ${run.conclusion}`);
+            }
+            core.setFailed("One or more required checks are not green.");
+          }
+
+    - name: Verify SHA originates from a merged PR
+      if: inputs.allow-direct-push != 'true'
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+      env:
+        SHA: ${{ inputs.preflight_sha }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const sha = process.env.SHA;
+          const { data: pulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            commit_sha: sha,
+          });
+          const mergedToMain = pulls.find(
+            (pr) => pr.merged_at && pr.base?.ref === "main" && pr.state === "closed"
+          );
+          if (!mergedToMain) {
+            core.error(
+              `SHA ${sha} is not the head of a merged PR on main. ` +
+                `Found ${pulls.length} associated pull(s): ` +
+                pulls.map((p) => `#${p.number}(${p.state}, merged=${Boolean(p.merged_at)})`).join(", ") +
+                ". Set allow-direct-push=true only for documented hotfix dispatches."
+            );
+            core.setFailed("Production deploy must run from a merged-PR commit on main.");
+            return;
+          }
+          core.info(`SHA ${sha} merged via PR #${mergedToMain.number} ('${mergedToMain.title}') at ${mergedToMain.merged_at}`);
+
+    - name: Direct-push override marker
+      if: inputs.allow-direct-push == 'true'
+      shell: bash
+      run: |
+        echo "::warning::allow-direct-push=true. Bypassing merged-PR check for ${{ inputs.preflight_sha }}. Dispatched by ${{ github.actor }}."
